@@ -119,7 +119,15 @@ visible to the agent; Docker Desktop does not support it, drop it there. For NVM
 
 ### FreeBSD and OPNsense
 
-Download `argus-agent-freebsd-amd64` from the release, then as root:
+Every push to `main` publishes the binary in the image `ghcr.io/antndev/argus-agent-freebsd`. Copy it out on any
+machine with Docker and move it to the FreeBSD host:
+
+```sh
+docker create --name argus-freebsd ghcr.io/antndev/argus-agent-freebsd:latest none
+docker cp argus-freebsd:/argus-agent argus-agent-freebsd-amd64 && docker rm argus-freebsd
+```
+
+Then as root on the FreeBSD host:
 
 ```sh
 install -m 755 argus-agent-freebsd-amd64 /usr/local/bin/argus-agent
@@ -159,6 +167,12 @@ subscription is removed automatically and logged.
 - **Mirrors**: ZeroByte reports S3 mirror syncs only when they fail. Set `url` and `api_key` in `zerobyte` and the
   node also polls the API for the last mirror sync of every schedule.
 - Argus alerts when a backup or mirror fails or when no success arrived within `shared.backup_max_age` (default 25 h).
+
+## Images
+
+Every push to `main` runs the tests and publishes `ghcr.io/antndev/argus-node` (amd64), `ghcr.io/antndev/argus-agent`
+(amd64, arm64) and `ghcr.io/antndev/argus-agent-freebsd`, each tagged `latest`, with the version from `Cargo.toml`
+and with the commit. The Home Assistant add-on pulls the version tag.
 
 ## Development
 

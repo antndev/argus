@@ -1,0 +1,83 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy
+      - run: cargo test --workspace --exclude argus-ui
+      - run: cargo clippy --workspace --exclude argus-ui --all-targets -- -D warnings
+      - run: cargo clippy -p argus-ui --target wasm32-unknown-unknown -- -D warnings
+
+  images:
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        include:
+          - image: argus-node
+            file: docker/node.Dockerfile
+            context: .
+            platforms: linux/amd64
+          - image: argus-agent
+            file: docker/agent.Dockerfile
+            context: .
+            platforms: linux/amd64,linux/arm64
+          - image: argus-agent-freebsd
+            file: docker/agent-freebsd.Dockerfile
+            context: out
+            platforms: linux/amd64
+    steps:
+      - uses: actions/checkout@v4
+      - if: matrix.image == 'argus-agent-freebsd'
+        run: |
+          cargo install cross --locked
+          cross build --release --locked -p argus-agent --target x86_64-unknown-freebsd
+          mkdir out && cp target/x86_64-unknown-freebsd/release/argus-agent out/argus-agent
+      - id: version
+        run: echo "value=$(grep -m1 '^version' Cargo.toml | cut -d '"' -f2)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ steps.version.outputs.value }},enable={{is_default_branch}}
+            type=sha
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          platforms: ${{ matrix.platforms }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
