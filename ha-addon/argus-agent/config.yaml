@@ -1,0 +1,36 @@
+name: Argus agent
+version: "0.1.0"
+slug: argus_agent
+description: Reports Home Assistant host metrics to Argus nodes
+url: https://github.com/antndev/argus
+arch:
+  - aarch64
+  - amd64
+image: ghcr.io/antndev/argus-agent
+init: false
+startup: services
+boot: auto
+host_network: true
+environment:
+  ARGUS_AGENT_CONFIG: /data/options.json
+options:
+  id: homeassistant
+  site: home
+  role: Home Assistant
+  os: Home Assistant OS
+  agent: addon
+  interval: 30
+  nodes:
+    - url: https://monitor.example.net
+      token: ""
+schema:
+  id: str
+  site: str
+  role: str
+  os: str
+  agent: list(addon)
+  interval: int(10,3600)
+  nodes:
+    - url: url
+      token: password
+      checks: bool?

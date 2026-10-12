@@ -1,0 +1,114 @@
+{
+  "name": "home",
+  "listen": "0.0.0.0:8090",
+  "database": "argus.db",
+  "ui": true,
+  "dashboard": {
+    "password": "a password, replaced by its argon2 hash on the first start"
+  },
+  "peer": {
+    "name": "vps",
+    "url": "https://monitor-vps.example.net",
+    "token": "shared sync secret, the same on both nodes"
+  },
+  "zerobyte": {
+    "webhook_token": "RandomWebhookSecret123",
+    "url": "http://zerobyte.example.net:4096",
+    "api_key": "zb_example",
+    "interval": "5m"
+  },
+  "shared": {
+    "revision": 0,
+    "agents": {
+      "server-1": "the agent token, replaced by its sha256 on the first start",
+      "server-2": "0d5c3b1f6a8e2c47b9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6"
+    },
+    "checks": {
+      "server-1": [
+        {
+          "name": "Website",
+          "type": "http",
+          "url": "https://www.example.net/health",
+          "status": 200,
+          "json": [
+            {
+              "path": "status",
+              "equals": "ok"
+            }
+          ],
+          "timeout": "10s"
+        },
+        { "name": "Router", "type": "ping", "host": "192.0.2.1" }
+      ]
+    },
+    "rules": [
+      {
+        "name": "CPU",
+        "metric": "cpu||total",
+        "above": 85,
+        "for": "5m"
+      },
+      {
+        "name": "Memory",
+        "metric": "memory||used",
+        "above": 85,
+        "for": "5m"
+      },
+      {
+        "name": "Disk",
+        "metric": "fs|*|used",
+        "above": 85
+      },
+      {
+        "name": "Load",
+        "metric": "load||5",
+        "hosts": [
+          "*",
+          "!server-2"
+        ],
+        "above": 10,
+        "for": "20m"
+      },
+      {
+        "name": "Load",
+        "metric": "load||5",
+        "hosts": [
+          "server-2"
+        ],
+        "above": 6,
+        "for": "20m"
+      },
+      {
+        "name": "Temperature",
+        "metric": "temp|*|value",
+        "above": 80,
+        "for": "5m"
+      },
+      {
+        "name": "NVMe temperature",
+        "metric": "temp|NVMe*|value",
+        "hosts": [
+          "server-2"
+        ],
+        "above": 70,
+        "for": "5m",
+        "severity": "critical"
+      }
+    ],
+    "push": {
+      "subject": "mailto:admin@example.net",
+      "receipt_urls": [
+        "https://monitor.example.net",
+        "https://monitor-vps.example.net"
+      ],
+      "status_every": "24h",
+      "devices": []
+    },
+    "backup_max_age": "25h",
+    "retention": {
+      "raw": "7d",
+      "medium": "90d",
+      "long": "730d"
+    }
+  }
+}

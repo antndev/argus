@@ -1,0 +1,12 @@
+[build]
+target = "crates/argus-ui/index.html"
+dist = "target/ui"
+
+[watch]
+watch = ["crates/argus-ui"]
+
+[serve]
+port = 8080
+
+[[proxy]]
+backend = "http://127.0.0.1:8090/api/"

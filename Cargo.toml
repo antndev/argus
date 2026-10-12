@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = ["crates/argus-model", "crates/argus-agent", "crates/argus-node", "crates/argus-ui"]
+default-members = ["crates/argus-model", "crates/argus-agent", "crates/argus-node"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license-file = "LICENSE"
+repository = "https://github.com/antndev/argus"
+authors = ["antndev <antonkonig691@gmail.com>"]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"

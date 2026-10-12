@@ -1,0 +1,51 @@
+id = "server-1"            # optional, default is the hostname
+site = "home"              # which node owns this host
+role = "Docker host"       # optional free text
+os = "Ubuntu 24.04"        # optional, overrides the name from os-release
+interval = 30              # seconds, or "30s", "5m"
+root = "/host"             # host filesystem prefix when running in a container, "" when native
+agent = "container"        # container | native | addon
+
+[[nodes]]
+url = "https://monitor.example.net"
+token = "change-me"        # or token_file = "/run/secrets/argus-token"
+checks = true              # run the http, tcp and ping checks this node hands out, false to ignore them
+
+[collectors]
+docker = "http://socket-proxy:2375"                  # optional, Docker API through a read-only socket proxy
+systemd = true                                       # failed units through the system D-Bus
+smart = ["/dev/nvme0"]                               # NVMe devices for SMART health
+filesystems = []                                     # optional allow list of mount points, empty means all
+ignore_interfaces = ["lo", "veth", "docker", "br-"]  # name prefixes
+interfaces = { pppoe0 = "WAN" }                      # optional description overrides
+
+[[checks]]
+name = "Web"
+type = "http"
+url = "https://service.example.net/health"
+status = 200                                    # optional, default is any 2xx or 3xx
+contains = "ok"                                 # optional
+json = [{ path = "status", equals = "ok" }]     # optional, dotted path, equals a string, number or bool
+timeout = 10
+
+[[checks]]
+name = "Game server"
+type = "tcp"
+host = "game.example.net"
+port = 25565
+
+[[checks]]
+name = "DNS"
+type = "ping"
+host = "1.1.1.1"
+
+[[checks]]
+name = "Database dumps"
+type = "file_age"
+path = "/host/opt/backups/last-success"
+max_age = "36h"
+
+[[checks]]
+name = "Custom"
+type = "exec"
+command = ["/usr/local/bin/something", "--json"]   # stdout {"status":"ok|warning|failed","message":"...","value":1.0}

@@ -1,0 +1,19 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy
+      - run: cargo test --workspace --exclude argus-ui
+      - run: cargo clippy --workspace --exclude argus-ui --all-targets -- -D warnings
+      - run: cargo clippy -p argus-ui --target wasm32-unknown-unknown -- -D warnings

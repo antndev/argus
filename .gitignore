@@ -1,0 +1,6 @@
+/target
+/dist
+CLAUDE.md
+CLAUDE.local.md
+.claude/
+/deploy

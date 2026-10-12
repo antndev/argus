@@ -1,0 +1,277 @@
+use std::time::Duration;
+
+use leptos::ev::SubmitEvent;
+use leptos::prelude::*;
+use leptos::task::spawn_local;
+use wasm_bindgen::JsCast;
+
+use crate::api;
+use crate::components::{Toast, segmented};
+use crate::format;
+use crate::icons;
+use crate::pages::{AlertsPage, ChecksPage, HostsPage, OverviewPage, SettingsPage, settings_actions, settings_meta};
+use crate::route::Route;
+use crate::store::{Range, Store, use_store};
+
+#[component]
+pub fn App() -> impl IntoView {
+    let store = Store::new();
+    provide_context(store);
+    store.refresh();
+    Effect::new(move |_| store.theme.get().apply());
+    set_interval(move || store.clock.set(js_sys::Date::now()), Duration::from_secs(1));
+    set_interval(move || store.refresh(), Duration::from_secs(5));
+    let _ = window_event_listener(leptos::ev::hashchange, move |_| store.route.set(Route::current()));
+
+    let section = Memo::new(move |_| store.route.with(|r| r.section()));
+    let page = move || match section.get() {
+        "hosts" => view! { <HostsPage/> }.into_any(),
+        "checks" => view! { <div class="body"><div class="page"><ChecksPage/></div></div> }.into_any(),
+        "alerts" => view! { <div class="body"><div class="page"><AlertsPage/></div></div> }.into_any(),
+        "settings" => view! { <SettingsPage/> }.into_any(),
+        _ => view! { <div class="body"><div class="page"><OverviewPage/></div></div> }.into_any(),
+    };
+
+    store.check_session();
+    crate::simulation::install(store);
+
+    view! {
+        <Show when=move || !store.locked.get() fallback=|| view! { <Login/> }>
+            <div class="app">
+                <Sidebar/>
+                <main class="main">
+                    <Header/>
+                    <Show when=move || store.offline.get()>
+                        <div class="offline" role="alert">"Cannot reach the node. Showing the last known state."</div>
+                    </Show>
+                    {page}
+                </main>
+            </div>
+        </Show>
+        <crate::simulation::SimulationPanel/>
+        <Toast/>
+    }
+}
+
+#[component]
+fn Login() -> impl IntoView {
+    let store = use_store();
+    let password = RwSignal::new(String::new());
+    let error = RwSignal::new(None::<String>);
+    let busy = RwSignal::new(false);
+    let submit = move |event: SubmitEvent| {
+        event.prevent_default();
+        busy.set(true);
+        let secret = password.get_untracked();
+        spawn_local(async move {
+            match api::send("/api/v1/login", &serde_json::json!({ "password": secret })).await {
+                Ok(()) => {
+                    let _ = password.try_set(String::new());
+                    let _ = error.try_set(None);
+                    store.refresh();
+                }
+                Err(failure) => {
+                    let _ = error.try_set(Some(if failure.status == 401 { "Wrong password".to_string() } else { failure.text }));
+                }
+            }
+            let _ = busy.try_set(false);
+        });
+    };
+    view! {
+        <div class="login">
+            <form class="login-card" on:submit=submit>
+                <span class="login-icon" inner_html=icons::LOCK></span>
+                <div>
+                    <h1>"Argus is locked"</h1>
+                    <p>"Enter the dashboard password."</p>
+                </div>
+                <input
+                    class="input"
+                    type="password"
+                    aria-label="Password"
+                    placeholder="Password"
+                    autocomplete="current-password"
+                    required
+                    autofocus
+                    prop:value=move || password.get()
+                    on:input=move |ev| password.set(event_target_value(&ev))
+                />
+                <p class="login-error" role="alert">{move || error.get().unwrap_or_default()}</p>
+                <button class="btn primary" type="submit" disabled=move || busy.get()>"Unlock"</button>
+            </form>
+        </div>
+    }
+}
+
+fn nav_item(
+    section: &'static str,
+    label: &'static str,
+    href: &'static str,
+    icon: &'static str,
+    badge: impl Fn() -> Option<(String, bool)> + Send + Sync + 'static,
+) -> impl IntoView {
+    let store = use_store();
+    let current = move || (store.route.with(|r| r.section()) == section).then_some("page");
+    view! {
+        <a class="nav-item" class:bottom=section == "settings" href=href aria-current=current>
+            <span class="ico" inner_html=icon></span>
+            <span class="nav-label">{label}</span>
+            {move || badge().map(|(text, warn)| view! { <span class="count" class:warn=warn>{text}</span> })}
+        </a>
+    }
+}
+
+#[component]
+fn Sidebar() -> impl IntoView {
+    let store = use_store();
+    let nav = NodeRef::<leptos::html::Nav>::new();
+    let pill = RwSignal::new(None::<(i32, i32)>);
+    let ready = RwSignal::new(false);
+    Effect::new(move |_| {
+        store.route.track();
+        let measure = move || {
+            let found = nav
+                .get_untracked()
+                .and_then(|nav| nav.query_selector("[aria-current=\"page\"]").ok().flatten())
+                .and_then(|item| item.dyn_into::<web_sys::HtmlElement>().ok())
+                .map(|item| (item.offset_top(), item.offset_height()));
+            pill.set(found);
+            set_timeout(move || ready.set(true), Duration::from_millis(50));
+        };
+        request_animation_frame(measure);
+    });
+    let _ = window_event_listener(leptos::ev::resize, move |_| {
+        if let Some(item) = nav
+            .get_untracked()
+            .and_then(|nav| nav.query_selector("[aria-current=\"page\"]").ok().flatten())
+            .and_then(|item| item.dyn_into::<web_sys::HtmlElement>().ok())
+        {
+            pill.set(Some((item.offset_top(), item.offset_height())));
+        }
+    });
+    let nodes = move || {
+        store
+            .overview
+            .with(|o| o.as_ref().map(|o| o.nodes.clone()).unwrap_or_default())
+            .into_iter()
+            .filter(|_| store.overview.with(|o| o.as_ref().is_some_and(|o| o.nodes.len() > 1)))
+            .map(|node| {
+                let detail = if node.this {
+                    "This node".to_string()
+                } else {
+                    match (node.reachable, node.last_sync) {
+                        (true, Some(at)) => format!("Synced {}", format::ago(at as f64, store.clock.get_untracked())),
+                        (false, Some(at)) => format!("Unreachable since {}", format::ago(at as f64, store.clock.get_untracked())),
+                        (_, None) => "Never synced".to_string(),
+                    }
+                };
+                view! {
+                    <div class="node">
+                        <span class="dot" class:critical=!node.reachable></span>
+                        <span class="node-name">{format!("{} node", node.name)}</span>
+                        <span class="node-detail">{detail}</span>
+                    </div>
+                }
+            })
+            .collect_view()
+    };
+    let pill_style = move || match pill.get() {
+        Some((top, height)) => format!("height:{height}px;transform:translateY({top}px);opacity:1"),
+        None => "opacity:0".to_string(),
+    };
+    view! {
+        <aside class="side" aria-label="Sidebar">
+            <a class="brand" href="#/">
+                <span class="logo" inner_html=icons::LOGO></span>
+                <span>"Argus"</span>
+            </a>
+            <nav class="nav" node_ref=nav aria-label="Sections">
+                <span class="nav-pill" class:ready=move || ready.get() style=pill_style aria-hidden="true"></span>
+                {nav_item("overview", "Overview", "#/", icons::OVERVIEW, || None)}
+                {nav_item("hosts", "Hosts", "#/hosts", icons::HOSTS, move || {
+                    let hosts = store.hosts();
+                    let down = hosts.iter().filter(|h| h.state >= argus_model::Severity::Warning).count();
+                    (!hosts.is_empty()).then(|| if down > 0 { (down.to_string(), true) } else { (hosts.len().to_string(), false) })
+                })}
+                {nav_item("checks", "Checks", "#/checks", icons::CHECKS, move || {
+                    let count = store.check_count();
+                    (count > 0).then(|| (count.to_string(), false))
+                })}
+                {nav_item("alerts", "Alerts", "#/alerts", icons::ALERTS, move || {
+                    let active = store.active_count();
+                    (active > 0).then(|| (active.to_string(), true))
+                })}
+                <div class="nodes">{nodes}</div>
+                {nav_item("settings", "Settings", "#/settings", icons::SETTINGS, move || store.dirty().then(|| ("Unsaved".to_string(), true)))}
+            </nav>
+        </aside>
+    }
+}
+
+#[component]
+fn Header() -> impl IntoView {
+    let store = use_store();
+    let title = move || match store.route.with(|r| r.section()) {
+        "hosts" => "Hosts",
+        "checks" => "Checks",
+        "alerts" => "Alerts",
+        "settings" => "Settings",
+        _ => "Overview",
+    };
+    let subtitle = move || {
+        if !store.loaded() {
+            return "Connecting to the node".to_string();
+        }
+        match store.route.get() {
+            Route::Overview => {
+                let lead = match store.active_count() {
+                    0 => "All clear".to_string(),
+                    1 => "1 active alert".to_string(),
+                    n => format!("{n} active alerts"),
+                };
+                format!("{lead}, {} hosts and {} checks reporting", store.host_ids().len(), store.check_count())
+            }
+            Route::Hosts | Route::Host(_) => {
+                let hosts = store.hosts();
+                let problems = hosts.iter().filter(|h| h.state >= argus_model::Severity::Warning).count();
+                match problems {
+                    0 => format!("{} hosts, all healthy", hosts.len()),
+                    n => format!("{} hosts, {n} with problems", hosts.len()),
+                }
+            }
+            Route::Checks => {
+                let failing = crate::components::all_checks(store).iter().filter(|(_, c)| c.status != argus_model::CheckStatus::Ok).count();
+                match failing {
+                    0 => format!("{} checks, all passing", store.check_count()),
+                    n => format!("{} checks, {n} with problems", store.check_count()),
+                }
+            }
+            Route::Alerts => {
+                let active = match store.active_count() {
+                    0 => "Nothing active".to_string(),
+                    n => format!("{n} active"),
+                };
+                format!("{active}, {} muted", store.mutes().len())
+            }
+            Route::Settings(_) => settings_meta(store),
+        }
+    };
+    let charts = move || matches!(store.route.get(), Route::Host(_));
+    let settings = move || matches!(store.route.get(), Route::Settings(_));
+    view! {
+        <header class="screen-head">
+            <h1>{title}</h1>
+            <span class="screen-meta">{subtitle}</span>
+            <div class="grow"></div>
+            <crate::simulation::SimulationBadge/>
+            <Show when=settings>{settings_actions()}</Show>
+            <Show when=move || !settings()>
+                <span class=move || if store.offline.get() { "live off" } else { "live" }>
+                    <i></i>
+                    {move || if store.offline.get() { "Offline" } else { "Live" }}
+                </span>
+            </Show>
+            <Show when=charts>{segmented(store.range, Range::OPTIONS, "Time range")}</Show>
+        </header>
+    }
+}

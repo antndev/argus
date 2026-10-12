@@ -1,0 +1,21 @@
+[package]
+name = "argus-ui"
+description = "Argus dashboard"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+argus-model = { path = "../argus-model" }
+leptos = { version = "0.8.22", features = ["csr"] }
+gloo-net = { version = "0.6", default-features = false, features = ["http", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["Clipboard", "Element", "HtmlElement", "HtmlSelectElement", "Location", "Navigator", "Storage", "Window"] }
+console_error_panic_hook = "0.1"

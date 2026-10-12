@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy
+      - run: cargo test --workspace --exclude argus-ui
+      - run: cargo clippy --workspace --exclude argus-ui --all-targets -- -D warnings
+      - run: cargo clippy -p argus-ui --target wasm32-unknown-unknown -- -D warnings
+
+  images:
+    needs: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: version
+        run: echo "tag=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/agent.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/argus-agent:${{ steps.version.outputs.tag }}
+            ghcr.io/${{ github.repository_owner }}/argus-agent:latest
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/node.Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/argus-node:${{ steps.version.outputs.tag }}
+            ghcr.io/${{ github.repository_owner }}/argus-node:latest
+
+  freebsd:
+    needs: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install cross --locked
+      - run: cross build --release --locked -p argus-agent --target x86_64-unknown-freebsd
+      - run: cp target/x86_64-unknown-freebsd/release/argus-agent argus-agent-freebsd-amd64
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: argus-agent-freebsd-amd64
