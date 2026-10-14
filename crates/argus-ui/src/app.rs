@@ -234,13 +234,12 @@ fn Sidebar() -> impl IntoView {
                 <span class="nav-pill" class:ready=move || ready.get() style=pill_style aria-hidden="true"></span>
                 {nav_item("overview", "Overview", "#/", icons::OVERVIEW, || None)}
                 {nav_item("hosts", "Hosts", "#/hosts", icons::HOSTS, move || {
-                    let hosts = store.hosts();
-                    let down = hosts.iter().filter(|h| h.state >= argus_model::Severity::Warning).count();
-                    (!hosts.is_empty()).then(|| if down > 0 { (down.to_string(), true) } else { (hosts.len().to_string(), false) })
+                    let down = store.hosts().iter().filter(|h| h.state >= argus_model::Severity::Warning).count();
+                    (down > 0).then(|| (down.to_string(), true))
                 })}
                 {nav_item("checks", "Checks", "#/checks", icons::CHECKS, move || {
-                    let count = store.check_count();
-                    (count > 0).then(|| (count.to_string(), false))
+                    let failing = crate::components::all_checks(store).iter().filter(|(_, c)| c.status != argus_model::CheckStatus::Ok).count();
+                    (failing > 0).then(|| (failing.to_string(), true))
                 })}
                 {nav_item("alerts", "Alerts", "#/alerts", icons::ALERTS, move || {
                     let active = store.active_count();
