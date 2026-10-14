@@ -181,7 +181,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: ${{ runner.temp }}/digests
-          pattern: digests-${{ matrix.image }}-*
+          pattern: digests-${{ matrix.image }}-linux-*
           merge-multiple: true
 
       - name: Require every platform
