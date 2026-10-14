@@ -6,12 +6,12 @@ use leptos::task::spawn_local;
 use wasm_bindgen::JsCast;
 
 use crate::api;
-use crate::components::{Toast, segmented};
+use crate::components::Toast;
 use crate::format;
 use crate::icons;
 use crate::pages::{AlertsPage, ChecksPage, HostsPage, OverviewPage, SettingsPage, settings_actions, settings_meta};
 use crate::route::Route;
-use crate::store::{Range, Store, use_store};
+use crate::store::{Store, use_store};
 
 #[component]
 pub fn App() -> impl IntoView {
@@ -210,10 +210,11 @@ fn Sidebar() -> impl IntoView {
                         (_, None) => "Never synced".to_string(),
                     }
                 };
+                let role = if node.internal { "Internal node" } else { "External node" };
                 view! {
-                    <div class="node">
+                    <div class="node" title=node.name.clone()>
                         <span class="dot" class:critical=!node.reachable></span>
-                        <span class="node-name">{format!("{} node", node.name)}</span>
+                        <span class="node-name">{role}</span>
                         <span class="node-detail">{detail}</span>
                     </div>
                 }
@@ -255,59 +256,12 @@ fn Sidebar() -> impl IntoView {
 #[component]
 fn Header() -> impl IntoView {
     let store = use_store();
-    let title = move || match store.route.with(|r| r.section()) {
-        "hosts" => "Hosts",
-        "checks" => "Checks",
-        "alerts" => "Alerts",
-        "settings" => "Settings",
-        _ => "Overview",
-    };
-    let subtitle = move || {
-        if !store.loaded() {
-            return "Connecting to the node".to_string();
-        }
-        match store.route.get() {
-            Route::Overview => {
-                let lead = match store.active_count() {
-                    0 => "All clear".to_string(),
-                    1 => "1 active alert".to_string(),
-                    n => format!("{n} active alerts"),
-                };
-                format!("{lead}, {} hosts and {} checks reporting", store.host_ids().len(), store.check_count())
-            }
-            Route::Hosts | Route::Host(_) => {
-                let hosts = store.hosts();
-                let problems = hosts.iter().filter(|h| h.state >= argus_model::Severity::Warning).count();
-                match problems {
-                    0 => format!("{} hosts, all healthy", hosts.len()),
-                    n => format!("{} hosts, {n} with problems", hosts.len()),
-                }
-            }
-            Route::Checks => {
-                let failing = crate::components::all_checks(store).iter().filter(|(_, c)| c.status != argus_model::CheckStatus::Ok).count();
-                match failing {
-                    0 => format!("{} checks, all passing", store.check_count()),
-                    n => format!("{} checks, {n} with problems", store.check_count()),
-                }
-            }
-            Route::Alerts => {
-                let active = match store.active_count() {
-                    0 => "Nothing active".to_string(),
-                    n => format!("{n} active"),
-                };
-                format!("{active}, {} muted", store.mutes().len())
-            }
-            Route::Settings(_) => settings_meta(store),
-        }
-    };
-    let charts = move || matches!(store.route.get(), Route::Host(_));
-    let settings = move || matches!(store.route.get(), Route::Settings(_));
     view! {
-        <header class="screen-head">
-            <h1>{title}</h1>
-            <span class="screen-meta">{subtitle}</span>
-            <Show when=settings>{settings_actions()}</Show>
-            <Show when=charts>{segmented(store.range, Range::OPTIONS, "Time range")}</Show>
-        </header>
+        <Show when=move || matches!(store.route.get(), Route::Settings(_))>
+            <header class="screen-head">
+                <span class="screen-meta">{move || settings_meta(store)}</span>
+                {settings_actions()}
+            </header>
+        </Show>
     }
 }

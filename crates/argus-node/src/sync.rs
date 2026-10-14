@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
-use argus_model::{Alert, BackupSchedule, Message, Mute, SyncPayload};
+use argus_model::{Alert, BackupSchedule, Message, SyncPayload};
 use axum::Json;
 use axum::extract::{Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
@@ -36,7 +36,6 @@ fn build(app: &App, now: i64, cursor: i64, with_samples: bool) -> SyncPayload {
     let samples = if with_samples { db::samples_since(&db, &ids, cursor, SAMPLE_LIMIT) } else { Vec::new() };
     SyncPayload {
         alerts: db::alerts(&db).into_iter().filter(|a| a.updated > now - DAY).collect(),
-        mutes: db::mutes(&db).into_iter().filter(|m| m.updated > now - DAY || m.until > now).collect(),
         events: db::events(&db, 200),
         messages: db::messages(&db).into_iter().filter(|m| m.time > now - DAY).map(|m| Message { delivered: None, ..m }).collect(),
         sent: db::marks(&db, Marks::Sent, now - DAY),
@@ -78,12 +77,6 @@ pub fn merge(app: &App, payload: SyncPayload, initiator: bool) {
         for alert in &payload.alerts {
             if newer(alerts.get(&alert.key), alert, |a| a.updated) {
                 let _ = db::save_alert(&db, alert);
-            }
-        }
-        let mutes: HashMap<String, Mute> = db::mutes(&db).into_iter().map(|m| (m.id.clone(), m)).collect();
-        for mute in &payload.mutes {
-            if newer(mutes.get(&mute.id), mute, |m| m.updated) {
-                let _ = db::save_mute(&db, mute);
             }
         }
         for message in &payload.messages {
@@ -205,7 +198,7 @@ mod tests {
     }
 
     #[test]
-    fn newer_alerts_and_mutes_win_and_peer_samples_arrive() {
+    fn newer_alerts_win_and_peer_samples_arrive() {
         let home = app("home");
         let vps = app("vps");
         db::save_alert(&home.db(), &Alert { key: "k".into(), state: AlertState::Firing, updated: 10, ..Default::default() }).expect("save");

@@ -1,4 +1,4 @@
-use argus_model::{Alert, BackupSchedule, BackupState, CheckResult, CheckStatus, HostSummary, Mute, SeriesData, Severity};
+use argus_model::{Alert, BackupSchedule, BackupState, CheckResult, CheckStatus, HostSummary, SeriesData, Severity};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
@@ -153,10 +153,6 @@ pub fn HostCard(id: String, index: usize) -> impl IntoView {
     let host = Memo::new(move |_| store.host(&lookup));
     let read = move |f: fn(&HostSummary) -> Option<f64>| host.with(|h| h.as_ref().and_then(f));
     let state = move || host.with(|h| h.as_ref().map(|h| h.state).unwrap_or_default());
-    let muted = move || {
-        let id = host.with(|h| h.as_ref().map(|h| h.info.id.clone())).unwrap_or_default();
-        store.alerts().iter().filter(|(a, m)| a.host == id && m.is_some()).count()
-    };
     let waiting = move || host.with(|h| h.as_ref().is_some_and(|h| h.last_seen == 0));
     let meta = move || {
         host.with(|h| h.as_ref().map(|h| if h.last_seen == 0 { "Waiting for the first report".to_string() } else { format!("{}, {}", h.info.os, h.info.arch) }))
@@ -237,10 +233,6 @@ pub fn HostCard(id: String, index: usize) -> impl IntoView {
                     } else {
                         view! { <Pill severity=state()/> }.into_any()
                     }}
-                    {move || {
-                        let count = muted();
-                        (count > 0).then(|| view! { <span class="hc-muted">{format!("{count} muted")}</span> })
-                    }}
                 </div>
                 <div class="hc-meta">{meta}</div>
                 <div class="hc-foot">{seen}</div>
@@ -282,16 +274,10 @@ pub fn HostCard(id: String, index: usize) -> impl IntoView {
 }
 
 #[component]
-pub fn AlertList(#[prop(optional)] include_muted: bool, #[prop(optional, into)] host: Option<String>) -> impl IntoView {
+pub fn AlertList(#[prop(optional, into)] host: Option<String>) -> impl IntoView {
     let store = use_store();
     let only = host.clone();
-    let rows = move || {
-        store
-            .alerts()
-            .into_iter()
-            .filter(|(alert, mute)| (include_muted || mute.is_none()) && only.as_ref().is_none_or(|h| &alert.host == h))
-            .collect::<Vec<_>>()
-    };
+    let rows = move || store.alerts().into_iter().filter(|alert| only.as_ref().is_none_or(|h| &alert.host == h)).collect::<Vec<_>>();
     let scoped = host.is_some();
     let clear = move || !scoped && store.loaded() && store.active_count() == 0;
     view! {
@@ -302,64 +288,27 @@ pub fn AlertList(#[prop(optional)] include_muted: bool, #[prop(optional, into)] 
                     <span>"Nothing needs attention right now."</span>
                 </div>
             </Show>
-            <For
-                each=rows
-                key=|(alert, mute)| (alert.key.clone(), mute.as_ref().map(|m| m.id.clone()))
-                children=move |(alert, mute)| alert_row(store, alert, mute, !scoped)
-            />
+            <For each=rows key=|alert| (alert.key.clone(), alert.severity, alert.title.clone()) children=move |alert| alert_row(store, alert, !scoped)/>
         </div>
     }
 }
 
-fn alert_row(store: Store, alert: Alert, mute: Option<Mute>, link: bool) -> impl IntoView {
+fn alert_row(store: Store, alert: Alert, link: bool) -> impl IntoView {
     let host_link = Route::Host(alert.host.clone()).href();
     let since = alert.fired_at.unwrap_or(alert.since) as f64;
-    match mute {
-        None => {
-            let detail = alert.detail.clone();
-            let meta = move || {
-                let age = format::duration(store.clock.get() - since);
-                if detail.is_empty() { format!("For {age}") } else { format!("{detail}, for {age}") }
-            };
-            let key = alert.key.clone();
-            let mute = move |_| {
-                store.mute_target.set(Some(key.clone()));
-                Route::Alerts.go();
-            };
-            view! {
-                <div class=format!("alert-row {}", class(alert.severity))>
-                    {sev_icon(alert.severity)}
-                    <div class="ar-body">
-                        <div><span class="ar-host">{alert.host.clone()}</span>{alert.title.clone()}</div>
-                        <div class="ar-meta">{meta}</div>
-                    </div>
-                    <div class="ar-act">
-                        <button class="btn" type="button" on:click=mute>"Mute"</button>
-                        {link.then(|| view! { <a class="btn ghost" href=host_link.clone()>"Open host"</a> })}
-                    </div>
-                </div>
-            }
-            .into_any()
-        }
-        Some(mute) => {
-            let reason = if mute.reason.is_empty() { String::new() } else { format!(", {}", mute.reason) };
-            let meta = format!("Muted until {}{reason}", format::when(mute.until as f64, js_sys::Date::now()));
-            let id = mute.id.clone();
-            view! {
-                <div class="alert-row muted">
-                    {sev_icon(Severity::Muted)}
-                    <div class="ar-body">
-                        <div><span class="ar-host">{alert.host.clone()}</span>{alert.title.clone()}</div>
-                        <div class="ar-meta">{meta}</div>
-                    </div>
-                    <div class="ar-act">
-                        <button class="btn" type="button" on:click=move |_| store.unmute(id.clone())>"Unmute"</button>
-                        {link.then(|| view! { <a class="btn ghost" href=host_link.clone()>"Open host"</a> })}
-                    </div>
-                </div>
-            }
-            .into_any()
-        }
+    let detail = alert.detail.clone();
+    let full = alert.detail.clone();
+    let age = move || format!("For {}", format::duration(store.clock.get() - since));
+    view! {
+        <div class=format!("alert-row {}", class(alert.severity))>
+            {sev_icon(alert.severity)}
+            <div class="ar-body">
+                <div><span class="ar-host">{alert.host.clone()}</span>{alert.title.clone()}</div>
+                {(!detail.is_empty()).then(|| view! { <div class="ar-detail" title=full>{detail}</div> })}
+                <div class="ar-meta">{age}</div>
+            </div>
+            {(link && store.host(&alert.host).is_some()).then(|| view! { <div class="ar-act"><a class="btn ghost" href=host_link>"Open host"</a></div> })}
+        </div>
     }
 }
 
@@ -382,7 +331,7 @@ pub fn ServiceList() -> impl IntoView {
         <Show when=empty>
             <p class="meta">"No checks yet. Add them under Settings, Checks."</p>
         </Show>
-        <ul class="svc">
+        <ul class="svc sheet">
             {move || {
                 checks
                     .get()
@@ -415,7 +364,7 @@ fn backup_row(store: Store, backup: BackupSchedule) -> impl IntoView {
     view! {
         <tr>
             <td>{backup.name.clone()}</td>
-            <td><Pill severity=severity text=text/>{(!message.is_empty()).then(|| view! { <span class="sub">{message}</span> })}</td>
+            <td><Pill severity=severity text=text/>{(!message.is_empty()).then(|| view! { <span class="sub clip" title=message.clone()>{message.clone()}</span> })}</td>
             <td>{last.map(|t| format::hhmm(t as f64)).unwrap_or_default()}<span class="sub">{move || ago(last)}</span></td>
             <td>{backup.size.clone()}{added.map(|text| view! { <span class="sub">{text}</span> })}</td>
             <td>
@@ -436,7 +385,7 @@ pub fn BackupTable() -> impl IntoView {
             when=move || !empty()
             fallback=|| view! { <p class="meta">"No backup data yet. Point ZeroByte's webhook at this node or set its API key."</p> }
         >
-            <div class="tbl-wrap">
+            <div class="tbl-wrap sheet">
                 <table>
                     <thead>
                         <tr><th>"Schedule"</th><th>"Status"</th><th>"Last success"</th><th>"Size"</th><th>"S3 mirror"</th></tr>

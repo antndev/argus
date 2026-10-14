@@ -7,18 +7,12 @@ use crate::store::use_store;
 pub fn OverviewPage() -> impl IntoView {
     let store = use_store();
     let ids = Memo::new(move |_| store.host_ids());
-    let counts = move || {
-        let alerts = store.alerts();
-        let active = alerts.iter().filter(|(_, mute)| mute.is_none()).count();
-        format!("{active} active, {} muted", alerts.len() - active)
-    };
     view! {
         <section>
             <div class="sec-head">
                 <h2>"Needs attention"</h2>
-                <span class="meta">{counts}</span>
             </div>
-            <AlertList include_muted=true/>
+            <AlertList/>
         </section>
         <section class="hosts">
             <div class="sec-head">
@@ -36,21 +30,19 @@ pub fn OverviewPage() -> impl IntoView {
                 />
             </div>
         </section>
-        <div class="two">
-            <section>
-                <div class="sec-head">
-                    <h2>"Checks"</h2>
-                    <a class="link" href="#/checks">"All checks"</a>
-                </div>
-                <ServiceList/>
-            </section>
-            <section>
-                <div class="sec-head">
-                    <h2>"Backups"</h2>
-                    <span class="meta">"ZeroByte schedules and S3 mirrors"</span>
-                </div>
-                <BackupTable/>
-            </section>
-        </div>
+        <section>
+            <div class="sec-head">
+                <h2>"Checks"</h2>
+                <a class="link" href="#/checks">"All checks"</a>
+            </div>
+            <ServiceList/>
+        </section>
+        <section>
+            <div class="sec-head">
+                <h2>"ZeroByte backups"</h2>
+                <span class="meta">"Schedules and S3 mirrors"</span>
+            </div>
+            <BackupTable/>
+        </section>
     }
 }

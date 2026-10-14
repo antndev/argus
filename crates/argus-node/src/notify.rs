@@ -162,19 +162,11 @@ pub fn status(app: &App, now: i64) {
     if !responsible || now - db::meta(&app.db(), "status_sent") < every.0 {
         return;
     }
-    let (active, muted) = {
-        let db = app.db();
-        let mutes = db::mutes(&db);
-        db::alerts(&db)
-            .into_iter()
-            .filter(|a| a.state == AlertState::Firing)
-            .fold((0, 0), |(active, muted), alert| if mutes.iter().any(|m| m.covers(&alert, now)) { (active, muted + 1) } else { (active + 1, muted) })
-    };
-    let text = match (active, muted) {
-        (0, 0) => "All clear".to_string(),
-        (0, m) => format!("All clear, {m} muted"),
-        (1, _) => "1 active alert".to_string(),
-        (a, _) => format!("{a} active alerts"),
+    let active = db::alerts(&app.db()).into_iter().filter(|a| a.state == AlertState::Firing).count();
+    let text = match active {
+        0 => "All clear".to_string(),
+        1 => "1 active alert".to_string(),
+        n => format!("{n} active alerts"),
     };
     let _ = db::set_meta(&app.db(), "status_sent", now);
     deliver(app, vec![Message { id: random_id(12), time: now, title: "Argus status".to_string(), message: text, priority: 2, delivered: None }]);

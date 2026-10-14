@@ -49,10 +49,6 @@ pub async fn send<B: Serialize>(path: &str, body: &B) -> Result<(), Failure> {
     checked(request.send().await).await.map(|_| ())
 }
 
-pub async fn delete(path: &str) -> Result<(), Failure> {
-    checked(Request::delete(path).send().await).await.map(|_| ())
-}
-
 pub fn encode(text: &str) -> String {
     js_sys::encode_uri_component(text).into()
 }

@@ -58,7 +58,45 @@ pub fn stats(message: &str) -> (Option<String>, Option<String>) {
     (size, added)
 }
 
+fn short(error: &str) -> String {
+    match error.find("/_data/") {
+        Some(at) => {
+            let start = error[..at].rfind(' ').map_or(0, |space| space + 1);
+            format!("{}{}", &error[..start], &error[at + "/_data".len()..])
+        }
+        None => error.to_string(),
+    }
+}
+
+pub fn readable(detail: &str) -> String {
+    let Some(start) = detail.find('{') else { return detail.trim().to_string() };
+    let values: Vec<Value> = serde_json::Deserializer::from_str(&detail[start..]).into_iter::<Value>().map_while(Result::ok).collect();
+    if values.is_empty() {
+        return detail.trim().to_string();
+    }
+    let mut errors = Vec::new();
+    let mut summary = None;
+    for value in &values {
+        let message = value.pointer("/error/message").or_else(|| value.get("message")).and_then(Value::as_str).unwrap_or_default();
+        match value.get("message_type").and_then(Value::as_str) {
+            Some("error") => errors.push(short(message)),
+            _ if !message.is_empty() => summary = Some(message.trim_start_matches("Warning: ").trim_start_matches("Fatal: ").trim()),
+            _ => {}
+        }
+    }
+    let mut summary = summary.filter(|s| !s.is_empty()).unwrap_or("The backup reported errors").to_string();
+    if let Some(first) = summary.get(..1) {
+        summary = first.to_uppercase() + &summary[1..];
+    }
+    match errors.as_slice() {
+        [] => summary,
+        [only] => format!("{summary}: {only}"),
+        [first, rest @ ..] => format!("{summary}: {first}, and {} more", rest.len()),
+    }
+}
+
 pub fn apply(schedule: &mut BackupSchedule, kind: Kind, at: i64, detail: &str) {
+    let detail = readable(detail);
     let latest = schedule.last_start.into_iter().chain(schedule.last_success).chain(schedule.last_failure).max().unwrap_or(i64::MIN);
     let current = at >= latest;
     match kind {
@@ -72,21 +110,21 @@ pub fn apply(schedule: &mut BackupSchedule, kind: Kind, at: i64, detail: &str) {
             schedule.last_success = schedule.last_success.max(Some(at));
             if current {
                 schedule.state = if kind == Kind::Success { BackupState::Ok } else { BackupState::Warning };
-                schedule.message = detail.to_string();
+                schedule.message = detail;
             }
         }
         Kind::Failure => {
             schedule.last_failure = schedule.last_failure.max(Some(at));
             if current {
                 schedule.state = BackupState::Failed;
-                schedule.message = detail.to_string();
+                schedule.message = detail;
             }
         }
         Kind::MirrorFailure => {
             if schedule.mirror_finished.is_none_or(|t| at >= t) {
                 schedule.mirror_state = BackupState::Failed;
                 schedule.mirror_finished = Some(at);
-                schedule.mirror_message = detail.to_string();
+                schedule.mirror_message = detail;
             }
         }
     }
@@ -188,7 +226,7 @@ pub fn apply_api(schedule: &mut BackupSchedule, item: &Value, mirrors: &[Value])
             schedule.mirror_message = task
                 .get("error")
                 .and_then(Value::as_str)
-                .map(str::to_string)
+                .map(readable)
                 .unwrap_or_else(|| format!("Last sync {}", task.get("status").and_then(Value::as_str).unwrap_or("unknown")));
         }
         None => {
@@ -233,6 +271,15 @@ pub fn poll(app: &App) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn restic_json_becomes_a_readable_sentence() {
+        let raw = r#"{"message_type":"error","error":{"message":"open /var/lib/zerobyte/volumes/F2x45tsX/_data/stacks/app/tmp/x.tmp: no such file or directory"},"during":"archival","item":"/x"} {"message_type":"exit_error","code":3,"message":"Warning: at least one source file could not be read"}"#;
+        assert_eq!(readable(raw), "At least one source file could not be read: open /stacks/app/tmp/x.tmp: no such file or directory");
+        assert_eq!(readable("disk full"), "disk full");
+        let two = format!("{raw} {}", r#"{"message_type":"error","error":{"message":"second"}}"#);
+        assert!(readable(&two).ends_with("and 1 more"));
+    }
 
     #[test]
     fn parses_all_zerobyte_titles() {

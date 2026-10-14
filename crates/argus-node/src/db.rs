@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use argus_model::{Alert, AlertState, BackupSchedule, Event, HostSnapshot, Message, Mute, Sample, SeriesData};
+use argus_model::{Alert, AlertState, BackupSchedule, Event, HostSnapshot, Message, Sample, SeriesData};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -20,7 +20,6 @@ CREATE TABLE IF NOT EXISTS samples_1h (series INTEGER NOT NULL, time INTEGER NOT
 CREATE TABLE IF NOT EXISTS hosts (id TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS alerts (key TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, time INTEGER NOT NULL, data TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS mutes (id TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, time INTEGER NOT NULL, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sent (id TEXT PRIMARY KEY, time INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS secrets (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -199,9 +198,6 @@ pub fn prune(db: &Db, now: i64) {
     for key in stale {
         let _ = delete_alert(db, &key);
     }
-    for mute in mutes(db).into_iter().filter(|m| m.until < now - 7 * DAY) {
-        let _ = db.execute("DELETE FROM mutes WHERE id = ?1", [&mute.id]);
-    }
 }
 
 pub fn events(db: &Db, limit: usize) -> Vec<Event> {
@@ -210,15 +206,6 @@ pub fn events(db: &Db, limit: usize) -> Vec<Event> {
 
 pub fn save_event(db: &Db, event: &Event) -> rusqlite::Result<()> {
     db.prepare_cached("INSERT OR IGNORE INTO events (id, time, data) VALUES (?1, ?2, ?3)")?.execute(params![event.id, event.time, json(event)])?;
-    Ok(())
-}
-
-pub fn mutes(db: &Db) -> Vec<Mute> {
-    all(db, "SELECT data FROM mutes")
-}
-
-pub fn save_mute(db: &Db, mute: &Mute) -> rusqlite::Result<()> {
-    db.prepare_cached("INSERT OR REPLACE INTO mutes (id, data) VALUES (?1, ?2)")?.execute(params![mute.id, json(mute)])?;
     Ok(())
 }
 

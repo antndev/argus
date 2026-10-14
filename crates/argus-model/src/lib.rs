@@ -205,24 +205,6 @@ pub struct Event {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
-pub struct Mute {
-    pub id: String,
-    pub alert: Option<String>,
-    pub host: Option<String>,
-    pub label: String,
-    pub until: i64,
-    pub reason: String,
-    pub updated: i64,
-}
-
-impl Mute {
-    pub fn covers(&self, alert: &Alert, now: i64) -> bool {
-        self.until > now && (self.alert.as_deref() == Some(alert.key.as_str()) || self.host.as_deref() == Some(alert.host.as_str()))
-    }
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
 pub struct Message {
     pub id: String,
     pub time: i64,
@@ -252,7 +234,6 @@ pub struct Sample {
 #[serde(default)]
 pub struct SyncPayload {
     pub alerts: Vec<Alert>,
-    pub mutes: Vec<Mute>,
     pub events: Vec<Event>,
     pub messages: Vec<Message>,
     pub sent: Vec<(String, i64)>,
@@ -298,6 +279,7 @@ pub struct NodeStatus {
     pub name: String,
     pub site: String,
     pub this: bool,
+    pub internal: bool,
     pub reachable: bool,
     pub last_sync: Option<i64>,
 }
@@ -332,7 +314,6 @@ pub struct Overview {
     pub nodes: Vec<NodeStatus>,
     pub hosts: Vec<HostSummary>,
     pub alerts: Vec<Alert>,
-    pub mutes: Vec<Mute>,
     pub backups: Vec<BackupSchedule>,
 }
 
@@ -350,16 +331,6 @@ pub struct RuleInfo {
 pub struct SeriesData {
     pub times: Vec<i64>,
     pub values: Vec<Vec<Option<f64>>>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct MuteRequest {
-    pub alert: Option<String>,
-    pub host: Option<String>,
-    pub minutes: Option<i64>,
-    pub until: Option<i64>,
-    pub reason: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -490,16 +461,6 @@ mod tests {
         let metric = Metric::new("fs", "/mnt/data", "used", 1.0);
         assert_eq!(split_key(&metric.key()), Some(("fs", "/mnt/data", "used")));
         assert_eq!(split_key(&metric_key("temp", "CPU package", "value")), Some(("temp", "CPU package", "value")));
-    }
-
-    #[test]
-    fn mute_covers_alert_or_host_until_expiry() {
-        let alert = Alert { key: "a".into(), host: "nas".into(), ..Default::default() };
-        let by_alert = Mute { alert: Some("a".into()), until: 10, ..Default::default() };
-        let by_host = Mute { host: Some("nas".into()), until: 10, ..Default::default() };
-        assert!(by_alert.covers(&alert, 5));
-        assert!(by_host.covers(&alert, 5));
-        assert!(!by_alert.covers(&alert, 10));
     }
 
     #[test]

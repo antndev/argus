@@ -2,10 +2,10 @@ use std::io::Read;
 use std::sync::Arc;
 
 use argus_model::{
-    Alert, AlertState, Event, HostInfo, HostSummary, IngestReply, Message, Mute, MuteRequest, NodeStatus, Overview, Report, RuleInfo, SeriesData, Severity,
+    Alert, AlertState, BackupSchedule, Event, HostInfo, HostSummary, IngestReply, Message, NodeStatus, Overview, Report, RuleInfo, SeriesData, Severity,
 };
 use axum::Json;
-use axum::extract::{Path, Query, Request, State};
+use axum::extract::{Query, Request, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use flate2::read::GzDecoder;
@@ -17,7 +17,7 @@ use crate::config::Config;
 use crate::rules::{self, STALE};
 use crate::sync::bearer;
 use crate::util::{DAY, HOUR, MINUTE, now_ms, random_id, sha256_hex};
-use crate::{App, db, notify};
+use crate::{App, db, notify, zerobyte};
 
 const MAX_REPORT: u64 = 16 * 1024 * 1024;
 const MAX_UPLOAD: usize = 4 * 1024 * 1024;
@@ -54,23 +54,21 @@ pub async fn ingest(State(app): State<Arc<App>>, request: Request) -> Response {
     Json(IngestReply { checks: config.shared.checks.get(&host).cloned().unwrap_or_default() }).into_response()
 }
 
-fn host_state(alerts: &[Alert], mutes: &[Mute], host: &str, now: i64) -> Severity {
-    alerts
-        .iter()
-        .filter(|a| a.host == host && a.state == AlertState::Firing && !mutes.iter().any(|m| m.covers(a, now)))
-        .map(|a| a.severity)
-        .max()
-        .unwrap_or(Severity::Ok)
+fn host_state(alerts: &[Alert], host: &str) -> Severity {
+    alerts.iter().filter(|a| a.host == host && a.state == AlertState::Firing).map(|a| a.severity).max().unwrap_or(Severity::Ok)
 }
 
 pub async fn overview(State(app): State<Arc<App>>) -> Json<Overview> {
     let now = now_ms();
     let snapshots = app.snapshots();
-    let (alerts, mutes, backups) = {
+    let (alerts, backups) = {
         let db = app.db();
         let alerts: Vec<Alert> = db::alerts(&db).into_iter().filter(|a| a.state == AlertState::Firing).collect();
-        let mutes: Vec<Mute> = db::mutes(&db).into_iter().filter(|m| m.until > now).collect();
-        (alerts, mutes, db::backups(&db))
+        let backups = db::backups(&db)
+            .into_iter()
+            .map(|b| BackupSchedule { message: zerobyte::readable(&b.message), mirror_message: zerobyte::readable(&b.mirror_message), ..b })
+            .collect();
+        (alerts, backups)
     };
     let config = app.config();
     let me = config.name.clone();
@@ -79,7 +77,7 @@ pub async fn overview(State(app): State<Arc<App>>) -> Json<Overview> {
         .map(|snapshot| {
             let report = snapshot.report;
             let owner = if app.owns(&report.host.site) { me.clone() } else { report.host.site.clone() };
-            let mut state = host_state(&alerts, &mutes, &report.host.id, now);
+            let mut state = host_state(&alerts, &report.host.id);
             if now - snapshot.last_seen >= STALE && state < Severity::Critical {
                 state = Severity::Critical;
             }
@@ -103,17 +101,19 @@ pub async fn overview(State(app): State<Arc<App>>) -> Json<Overview> {
         ..Default::default()
     }));
     hosts.sort_by_key(|h| config.shared.order.iter().position(|id| *id == h.info.id).unwrap_or(usize::MAX));
-    let mut nodes = vec![NodeStatus { name: me.clone(), site: me, this: true, reachable: true, last_sync: app.peer_state().last_sync }];
+    let internal = config.peer.is_none() || config.initiates_sync();
+    let mut nodes = vec![NodeStatus { name: me.clone(), site: me, this: true, internal, reachable: true, last_sync: app.peer_state().last_sync }];
     if let Some(peer) = &config.peer {
         nodes.push(NodeStatus {
             name: peer.name.clone(),
             site: peer.name.clone(),
             this: false,
+            internal: !internal,
             reachable: !app.peer_down(now),
             last_sync: app.peer_state().last_sync,
         });
     }
-    Json(Overview { now, node: config.name.clone(), nodes, hosts, alerts, mutes, backups })
+    Json(Overview { now, node: config.name.clone(), nodes, hosts, alerts, backups })
 }
 
 #[derive(Deserialize)]
@@ -142,47 +142,6 @@ pub async fn events(State(app): State<Arc<App>>, Query(query): Query<EventsQuery
 
 pub async fn rules(State(app): State<Arc<App>>) -> Json<Vec<RuleInfo>> {
     Json(rules::describe(&app))
-}
-
-fn record(app: &App, mute: &Mute, kind: &str, note: String) {
-    let db = app.db();
-    let _ = db::save_mute(&db, mute);
-    let (target, text) = mute.label.split_once(", ").map_or((mute.label.clone(), String::new()), |(a, b)| (a.to_string(), b.to_string()));
-    let event = Event { id: random_id(12), time: now_ms(), severity: Severity::Muted, kind: kind.to_string(), target, text, note };
-    let _ = db::save_event(&db, &event);
-}
-
-pub async fn create_mute(State(app): State<Arc<App>>, Json(request): Json<MuteRequest>) -> Response {
-    let now = now_ms();
-    let until = request.until.unwrap_or_else(|| now + request.minutes.unwrap_or(240) * MINUTE);
-    if until <= now || until > now + 365 * DAY {
-        return (StatusCode::BAD_REQUEST, "until must be in the future and within a year").into_response();
-    }
-    let label = match (&request.alert, &request.host) {
-        (Some(key), _) => match db::alerts(&app.db()).into_iter().find(|a| &a.key == key) {
-            Some(alert) => format!("{}, {}", alert.host, alert.title),
-            None => return (StatusCode::NOT_FOUND, "unknown alert").into_response(),
-        },
-        (None, Some(host)) => format!("{host}, All alerts"),
-        (None, None) => return (StatusCode::BAD_REQUEST, "alert or host required").into_response(),
-    };
-    let reason = request.reason.trim().chars().take(200).collect::<String>();
-    let mute = Mute { id: random_id(12), alert: request.alert, host: request.host, label, until, reason, updated: now };
-    record(&app, &mute, "muted", String::new());
-    app.wake_sync();
-    Json(mute).into_response()
-}
-
-pub async fn delete_mute(State(app): State<Arc<App>>, Path(id): Path<String>) -> StatusCode {
-    let now = now_ms();
-    let Some(mut mute) = db::mutes(&app.db()).into_iter().find(|m| m.id == id) else {
-        return StatusCode::NOT_FOUND;
-    };
-    mute.until = now;
-    mute.updated = now;
-    record(&app, &mute, "unmuted", "notifications resume".to_string());
-    app.wake_sync();
-    StatusCode::NO_CONTENT
 }
 
 fn version(config: &Config) -> String {

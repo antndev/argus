@@ -1,11 +1,10 @@
 use std::time::Duration;
 
-use argus_model::{Alert, AlertState, Event, HostSummary, Mute, MuteRequest, Overview, metric_key};
+use argus_model::{Alert, AlertState, Event, HostSummary, Overview, metric_key};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::api;
-use crate::format;
 use crate::route::Route;
 use crate::theme::Theme;
 
@@ -55,7 +54,6 @@ pub struct Store {
     pub gate: RwSignal<String>,
     pub events: RwSignal<Vec<Event>>,
     pub toast: RwSignal<Option<(u64, String)>>,
-    pub mute_target: RwSignal<Option<String>>,
     pub theme: RwSignal<Theme>,
     pub config: RwSignal<Option<serde_json::Value>>,
     pub saved: RwSignal<Option<ConfigView>>,
@@ -85,7 +83,6 @@ impl Store {
             gate: RwSignal::new("login".to_string()),
             events: RwSignal::new(Vec::new()),
             toast: RwSignal::new(None),
-            mute_target: RwSignal::new(None),
             theme: RwSignal::new(Theme::load()),
             config: RwSignal::new(None),
             saved: RwSignal::new(None),
@@ -93,10 +90,6 @@ impl Store {
             dragging: RwSignal::new(None),
             toasts: StoredValue::new(0),
         }
-    }
-
-    pub fn now(&self) -> i64 {
-        self.clock.get() as i64
     }
 
     pub fn refresh(&self) {
@@ -225,30 +218,15 @@ impl Store {
         self.overview.with(|o| o.as_ref().and_then(|o| o.hosts.iter().find(|h| h.info.id == id).cloned()))
     }
 
-    pub fn mutes(&self) -> Vec<Mute> {
-        let now = self.now();
-        self.overview.with(|o| o.as_ref().map(|o| o.mutes.iter().filter(|m| m.until > now).cloned().collect()).unwrap_or_default())
-    }
-
-    pub fn alerts(&self) -> Vec<(Alert, Option<Mute>)> {
-        let now = self.now();
-        let mut list: Vec<(Alert, Option<Mute>)> = self.overview.with(|o| {
-            o.as_ref()
-                .map(|o| {
-                    o.alerts.iter().filter(|a| a.state == AlertState::Firing).map(|a| (a.clone(), o.mutes.iter().find(|m| m.covers(a, now)).cloned())).collect()
-                })
-                .unwrap_or_default()
-        });
-        list.sort_by(|a, b| a.1.is_some().cmp(&b.1.is_some()).then(b.0.severity.cmp(&a.0.severity)).then(a.0.since.cmp(&b.0.since)));
+    pub fn alerts(&self) -> Vec<Alert> {
+        let mut list: Vec<Alert> =
+            self.overview.with(|o| o.as_ref().map(|o| o.alerts.iter().filter(|a| a.state == AlertState::Firing).cloned().collect()).unwrap_or_default());
+        list.sort_by(|a, b| b.severity.cmp(&a.severity).then(a.since.cmp(&b.since)));
         list
     }
 
     pub fn active_count(&self) -> usize {
-        self.alerts().iter().filter(|(_, mute)| mute.is_none()).count()
-    }
-
-    pub fn check_count(&self) -> usize {
-        self.overview.with(|o| o.as_ref().map(|o| o.hosts.iter().map(|h| h.checks.len()).sum()).unwrap_or_default())
+        self.alerts().len()
     }
 
     pub fn notify(&self, message: impl Into<String>) {
@@ -264,34 +242,6 @@ impl Store {
             },
             Duration::from_millis(3_200),
         );
-    }
-
-    pub fn mute(&self, request: MuteRequest) {
-        let store = *self;
-        spawn_local(async move {
-            match api::post::<_, Mute>("/api/v1/mutes", &request).await {
-                Ok(mute) => {
-                    store.notify(format!("Muted until {}", format::when(mute.until as f64, js_sys::Date::now())));
-                    store.refresh();
-                    store.refresh_events();
-                }
-                Err(error) => store.notify(format!("Mute failed, {error}")),
-            }
-        });
-    }
-
-    pub fn unmute(&self, id: String) {
-        let store = *self;
-        spawn_local(async move {
-            match api::delete(&format!("/api/v1/mutes/{}", api::encode(&id))).await {
-                Ok(()) => {
-                    store.notify("Unmuted, notifications resume");
-                    store.refresh();
-                    store.refresh_events();
-                }
-                Err(error) => store.notify(format!("Unmute failed, {error}")),
-            }
-        });
     }
 }
 

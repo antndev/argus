@@ -2,10 +2,10 @@ use argus_model::HostSummary;
 use leptos::prelude::*;
 
 use crate::charts::{Chart, ChartSpec, Unit};
-use crate::components::{AlertList, Pill, check_severity};
+use crate::components::{AlertList, Pill, check_severity, segmented};
 use crate::format;
 use crate::icons;
-use crate::store::{key, latest, limit, temperatures, use_store};
+use crate::store::{Range, key, latest, limit, temperatures, use_store};
 
 fn threshold(spec: ChartSpec, value: Option<f64>, text: impl Fn(f64) -> String) -> ChartSpec {
     match value {
@@ -198,18 +198,21 @@ pub fn HostPage(host_id: String) -> impl IntoView {
 
     view! {
         <div class="detail-head">
-            <h2>{id.clone()}</h2>
-            <div class="detail-sub">
-                {move || view! { <Pill severity=state()/> }}
-                <span>{about}</span>
-                <span class="dim">{seen}</span>
+            <div>
+                <h2>{id.clone()}</h2>
+                <div class="detail-sub">
+                    {move || view! { <Pill severity=state()/> }}
+                    <span>{about}</span>
+                    <span class="dim">{seen}</span>
+                </div>
             </div>
+            {segmented(store.range, Range::OPTIONS, "Time range")}
         </div>
         <Show when=move || store.loaded() && host.with(|h| h.as_ref().is_none_or(|h| h.last_seen == 0))>
             <p class="empty-note">"No report yet. Install the agent on this host with its token from Settings, Hosts and agents, it shows up here within 30 seconds."</p>
         </Show>
         <section>
-            <AlertList include_muted=true host=id.clone()/>
+            <AlertList host=id.clone()/>
         </section>
         <div class="chart-grid">{move || specs.get().into_iter().map(|spec| view! { <Chart spec=spec/> }).collect_view()}</div>
         <div class="two">

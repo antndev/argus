@@ -26,6 +26,8 @@ agents ──HTTPS──▶ internal node ◀──sync, started by internal─�
                          Argus on your phone's home screen
 ```
 
+- One internal node is enough. The external node is optional: it watches your network from the outside and takes
+  over when the internal node is gone. Without it, leave out `peer` (Settings, External node, off).
 - Every host belongs to one node (its `site`). That node evaluates the host's rules and sends its alerts.
 - Agents at home report to both nodes, so the external node can take over when the internal node is gone. After 60 seconds
   without sync each node takes over the hosts it still receives reports from. An alert that was already sent is

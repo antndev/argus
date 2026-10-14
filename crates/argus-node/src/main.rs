@@ -20,7 +20,7 @@ use std::time::{Duration, SystemTime};
 use argus_model::{AlertState, CheckStatus, Event, HostSnapshot, Message, Report, Sample, Severity};
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
-use axum::routing::{delete, get, post, put};
+use axum::routing::{get, post, put};
 
 use crate::config::Config;
 use crate::db::Db;
@@ -279,8 +279,6 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/v1/series", get(api::series))
         .route("/api/v1/events", get(api::events))
         .route("/api/v1/rules", get(api::rules))
-        .route("/api/v1/mutes", post(api::create_mute))
-        .route("/api/v1/mutes/{id}", delete(api::delete_mute))
         .route("/api/v1/config", get(api::get_config))
         .route("/api/v1/config", put(api::put_config))
         .route("/api/v1/token", get(api::token))

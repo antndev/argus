@@ -145,16 +145,21 @@ fn backup_conditions(app: &App, now: i64, schedules: Vec<BackupSchedule>) -> Vec
     for backup in schedules {
         let name = &backup.name;
         match backup.state {
-            BackupState::Failed => {
-                conditions.push(Condition::new(BACKUP_HOST, "backup", name, Severity::Critical, format!("Backup {name} failed"), backup.message.clone()))
-            }
+            BackupState::Failed => conditions.push(Condition::new(
+                BACKUP_HOST,
+                "backup",
+                name,
+                Severity::Critical,
+                format!("Backup {name} failed"),
+                crate::zerobyte::readable(&backup.message),
+            )),
             BackupState::Warning => conditions.push(Condition::new(
                 BACKUP_HOST,
                 "backup",
                 name,
                 Severity::Warning,
                 format!("Backup {name} completed with warnings"),
-                backup.message.clone(),
+                crate::zerobyte::readable(&backup.message),
             )),
             _ => {
                 if let Some(last) = backup.last_success.filter(|t| now - t > max_age) {
@@ -272,10 +277,9 @@ fn rank(alert: &Alert) -> u8 {
 fn reconcile(app: &App, now: i64, conditions: Vec<Condition>, hosts: &HashSet<String>, keys: &HashSet<String>) {
     let me = app.config().name.clone();
     let mut changes: Vec<(Alert, bool)> = Vec::new();
-    let mut transitions: Vec<(Alert, bool, bool)> = Vec::new();
+    let mut transitions: Vec<(Alert, bool)> = Vec::new();
     {
         let db = app.db();
-        let mutes = db::mutes(&db);
         let existing: HashMap<String, Alert> = db::alerts(&db).into_iter().map(|a| (a.key.clone(), a)).collect();
         let mut seen = HashSet::new();
         for condition in conditions {
@@ -295,13 +299,12 @@ fn reconcile(app: &App, now: i64, conditions: Vec<Condition>, hosts: &HashSet<St
             alert.title = condition.title;
             alert.detail = condition.detail;
             alert.value = condition.value;
-            let muted = mutes.iter().any(|m| m.covers(&alert, now));
             if alert.state == AlertState::Pending && now - alert.since >= condition.hold {
                 alert.state = AlertState::Firing;
                 alert.fired_at = Some(now);
-                transitions.push((alert.clone(), true, muted));
+                transitions.push((alert.clone(), true));
             }
-            if alert.state == AlertState::Firing && !alert.notified_fire && !muted {
+            if alert.state == AlertState::Firing && !alert.notified_fire {
                 alert.notified_fire = true;
                 changes.push((alert.clone(), true));
             }
@@ -330,26 +333,19 @@ fn reconcile(app: &App, now: i64, conditions: Vec<Condition>, hosts: &HashSet<St
             resolved.resolved_at = Some(now);
             resolved.owner = me.clone();
             resolved.updated = now;
-            let muted = mutes.iter().any(|m| m.covers(alert, now));
-            if resolved.notified_fire && !resolved.notified_resolve && !muted {
+            if resolved.notified_fire && !resolved.notified_resolve {
                 resolved.notified_resolve = true;
                 changes.push((resolved.clone(), false));
             }
-            transitions.push((resolved.clone(), false, muted));
+            transitions.push((resolved.clone(), false));
             let _ = db::save_alert(&db, &resolved);
         }
     }
     changes.sort_by_key(|(alert, _)| rank(alert));
     let note = notify::deliver(app, notify::compose(&changes, now));
     let db = app.db();
-    for (alert, fired, muted) in transitions {
-        let note = if muted {
-            "muted, nothing sent".to_string()
-        } else if changes.iter().any(|(a, f)| a.key == alert.key && *f == fired) {
-            note.clone()
-        } else {
-            "nothing sent".to_string()
-        };
+    for (alert, fired) in transitions {
+        let note = if changes.iter().any(|(a, f)| a.key == alert.key && *f == fired) { note.clone() } else { "nothing sent".to_string() };
         let event = Event {
             id: random_id(12),
             time: now,
@@ -432,7 +428,7 @@ mod tests {
     use super::*;
     use crate::config::{Config, Peer, Span, default_rules};
     use crate::util::MINUTE;
-    use argus_model::{CheckResult, HostInfo, Inventory, Mute, Raid, Report};
+    use argus_model::{CheckResult, HostInfo, Inventory, Raid, Report};
 
     fn config(peer: bool) -> Config {
         let mut config = Config { name: "home".into(), ..Default::default() };
@@ -537,18 +533,6 @@ mod tests {
         assert!(alerts(&app).is_empty());
         evaluate(&app, 10 * MINUTE + 2 * MINUTE);
         assert_eq!(alerts(&app)["h|unreachable|"].state, AlertState::Firing);
-    }
-
-    #[test]
-    fn muted_alert_fires_silently_and_notifies_after_mute_ends() {
-        let app = app(false);
-        db::save_mute(&app.db(), &Mute { id: "m".into(), host: Some("h".into()), until: MINUTE, ..Default::default() }).expect("mute");
-        app.store_report(report("h", "home", vec![Metric::new("fs", "/", "used", 90.0)]), 0);
-        evaluate(&app, 0);
-        assert!(!alerts(&app)["h|Disk|/"].notified_fire);
-        app.store_report(report("h", "home", vec![Metric::new("fs", "/", "used", 90.0)]), 2 * MINUTE);
-        evaluate(&app, 2 * MINUTE);
-        assert!(alerts(&app)["h|Disk|/"].notified_fire);
     }
 
     #[test]

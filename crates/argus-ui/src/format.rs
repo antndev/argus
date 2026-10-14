@@ -4,8 +4,6 @@ const S: f64 = 1_000.0;
 const DAY: f64 = 86_400.0 * S;
 
 const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
 fn date(t: f64) -> js_sys::Date {
     js_sys::Date::new(&JsValue::from_f64(t))
 }
@@ -27,17 +25,6 @@ pub fn day_label(t: f64, now: f64) -> String {
         "Yesterday".to_string()
     } else {
         format!("{} {}", d.get_date(), MONTHS[d.get_month() as usize])
-    }
-}
-
-pub fn when(t: f64, now: f64) -> String {
-    let d = date(t);
-    if same_day(&d, &date(now)) {
-        hhmm(t)
-    } else if same_day(&d, &date(now + DAY)) {
-        format!("tomorrow {}", hhmm(t))
-    } else {
-        format!("{} {}", WEEKDAYS[d.get_day() as usize], hhmm(t))
     }
 }
 
