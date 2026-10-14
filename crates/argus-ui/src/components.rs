@@ -40,7 +40,7 @@ pub fn backup_status(state: BackupState) -> (Severity, &'static str) {
         BackupState::Running => (Severity::Muted, "Running"),
         BackupState::Warning => (Severity::Warning, "Warning"),
         BackupState::Failed => (Severity::Critical, "Failed"),
-        BackupState::Unknown => (Severity::Muted, "Unknown"),
+        BackupState::Unknown => (Severity::Muted, "No run yet"),
     }
 }
 
