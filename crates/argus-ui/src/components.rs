@@ -232,7 +232,11 @@ pub fn HostCard(id: String, index: usize) -> impl IntoView {
             <div class="hc-id">
                 <div class="hc-top">
                     <span class="hc-name">{id.clone()}</span>
-                    {move || if waiting() { view! { <Pill severity=Severity::Muted text="Waiting"/> }.into_any() } else { view! { <Pill severity=state()/> }.into_any() }}
+                    {move || if waiting() {
+                        view! { <span class="pill muted"><span class="ico" inner_html=icons::WAITING></span>"Waiting"</span> }.into_any()
+                    } else {
+                        view! { <Pill severity=state()/> }.into_any()
+                    }}
                     {move || {
                         let count = muted();
                         (count > 0).then(|| view! { <span class="hc-muted">{format!("{count} muted")}</span> })
