@@ -275,12 +275,6 @@ h3 {
   animation: look 11s ease-in-out infinite;
 }
 
-.logo .lid {
-  transform-origin: center;
-  transform-box: fill-box;
-  animation: blink 11s ease-in-out infinite;
-}
-
 .nav {
   position: relative;
   display: flex;
@@ -1443,18 +1437,6 @@ td .sev {
   54%,
   58% {
     transform: translate(1.4px, 0.2px);
-  }
-}
-
-@keyframes blink {
-  0%,
-  86%,
-  92%,
-  100% {
-    transform: scaleY(1);
-  }
-  89% {
-    transform: scaleY(0.12);
   }
 }
 

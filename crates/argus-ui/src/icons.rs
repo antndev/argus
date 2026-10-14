@@ -6,7 +6,7 @@ pub const WARNING: &str = r#"<svg viewBox="0 0 16 16" aria-hidden="true"><path d
 
 pub const CRITICAL: &str = r#"<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.4 1.8h5.2l3.6 3.6v5.2l-3.6 3.6H5.4l-3.6-3.6V5.4z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M6 6l4 4M10 6l-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>"#;
 
-pub const LOGO: &str = r#"<svg viewBox="0 0 24 24" aria-hidden="true"><path class="lid" d="M2 12c2.8-4.7 6.1-7 10-7s7.2 2.3 10 7c-2.8 4.7-6.1 7-10 7s-7.2-2.3-10-7z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><g class="iris"><circle cx="12" cy="12" r="3.6" fill="currentColor"/><circle cx="13.2" cy="10.8" r="1" fill="var(--bg-side)"/></g></svg>"#;
+pub const LOGO: &str = r#"<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12c2.8-4.7 6.1-7 10-7s7.2 2.3 10 7c-2.8 4.7-6.1 7-10 7s-7.2-2.3-10-7z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><g class="iris"><circle cx="12" cy="12" r="3.6" fill="currentColor"/><circle cx="13.2" cy="10.8" r="1" fill="var(--bg-side)"/></g></svg>"#;
 
 macro_rules! line_icon {
     ($name:ident, $body:literal) => {
