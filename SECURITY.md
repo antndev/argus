@@ -25,7 +25,7 @@ changes anything on them.
 - The node image carries the agent too. Started as root, the node launches the agent as its own process and then
   switches itself to user 65534 before it opens a port, so only the agent, which listens on nothing, keeps root.
 - A failing JSON assertion reports which field did not match, never the value it found, and agents accept at most 64
-  http, tcp and ping checks from a node. The internal node never takes central checks from the external node, so a
+  http, tcp and ping checks from a node. The internal node never takes central checks or standalone services from the external node, so a
   compromised external node cannot point the home agents at local services.
 - NVMe SMART health needs the device and `CAP_SYS_ADMIN`. Leave `smart` empty if that is not acceptable, temperatures
   still come from hwmon without it.

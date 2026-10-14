@@ -62,6 +62,7 @@ fn adopt(app: &App, incoming: Option<serde_json::Value>, initiator: bool) {
     let taken = app.edit_config(false, |current| {
         if initiator {
             shared.checks = current.shared.checks.clone();
+            shared.services = current.shared.services.clone();
         }
         let newer = shared.revision > current.shared.revision || (!initiator && shared.revision == current.shared.revision);
         let mut next = current.clone();
