@@ -322,58 +322,39 @@ pub fn ServiceList() -> impl IntoView {
     }
 }
 
-fn destinations(store: Store, backup: &BackupSchedule) -> impl IntoView + use<> {
-    let ago = move |at: Option<i64>| at.map(|t| format::ago(t as f64, store.clock.get())).unwrap_or_default();
-    let primary = (!backup.repository.is_empty()).then(|| {
-        view! {
-            <div class="dest">
-                <span class="tag">{backup.repository_kind.clone()}</span>
-                <span class="dest-name">{backup.repository.clone()}</span>
-            </div>
-        }
-    });
-    let mirrors = backup
-        .mirrors
-        .iter()
-        .map(|mirror| {
-            let (severity, text) = backup_status(mirror.state);
-            let synced = mirror.state != BackupState::Unknown;
-            let (finished, message) = (mirror.finished, mirror.message.clone());
-            let detail = move || {
-                if !synced {
-                    "Not synced yet".to_string()
-                } else if message.is_empty() {
-                    ago(finished)
-                } else {
-                    message.clone()
-                }
-            };
-            view! {
-                <div class="dest mirror">
-                    <span class="tag">{mirror.kind.clone()}</span>
-                    <span class="dest-name">{mirror.repository.clone()}</span>
-                    {synced.then(|| view! { <Pill severity=severity text=text/> })}
-                    <span class="sub clip" title=mirror.message.clone()>{detail}</span>
-                </div>
-            }
-        })
-        .collect_view();
-    let lonely = (!backup.repository.is_empty() && backup.mirrors.is_empty()).then(|| view! { <div class="dest"><span class="sub">"No mirror"</span></div> });
-    let fallback = (backup.repository.is_empty() && backup.mirrors.is_empty() && backup.mirror_state != BackupState::Unknown).then(|| {
-        let (severity, text) = backup_status(backup.mirror_state);
-        let (finished, message, title) = (backup.mirror_finished, backup.mirror_message.clone(), backup.mirror_message.clone());
-        view! {
-            <div class="dest mirror">
-                <span class="dest-name">"Mirror"</span>
-                <Pill severity=severity text=text/>
-                <span class="sub clip" title=title>{move || if message.is_empty() { ago(finished) } else { message.clone() }}</span>
-            </div>
-        }
-    });
-    view! { <div class="dests">{primary}{mirrors}{lonely}{fallback}</div> }
+fn repository(backup: &BackupSchedule) -> impl IntoView + use<> {
+    let kind = Some(backup.repository_kind.clone()).filter(|kind| !kind.is_empty() && !backup.repository.contains(kind.as_str()));
+    view! {
+        {backup.repository.clone()}
+        {kind.map(|kind| view! { <span class="sub">{kind}</span> })}
+    }
 }
 
-fn backup_row(store: Store, backup: BackupSchedule, stored: bool) -> impl IntoView {
+fn mirror(store: Store, name: String, state: BackupState, finished: Option<i64>, message: String) -> impl IntoView {
+    let (severity, _) = backup_status(state);
+    let title = message.clone();
+    let detail = move || match (state, message.is_empty(), finished) {
+        (BackupState::Unknown, _, _) => "Not synced yet".to_string(),
+        (_, false, _) => message.clone(),
+        (_, true, Some(at)) => format!("Synced {}", format::ago(at as f64, store.clock.get())),
+        (_, true, None) => String::new(),
+    };
+    view! {
+        <div class="mirror">
+            <div>{sev_icon(severity)}{name}</div>
+            <span class="sub clip" title=title>{detail}</span>
+        </div>
+    }
+}
+
+fn mirrors(store: Store, backup: &BackupSchedule) -> impl IntoView + use<> {
+    if backup.mirrors.is_empty() && backup.mirror_state != BackupState::Unknown {
+        return mirror(store, "Mirror".to_string(), backup.mirror_state, backup.mirror_finished, backup.mirror_message.clone()).into_any();
+    }
+    backup.mirrors.iter().map(|m| mirror(store, m.repository.clone(), m.state, m.finished, m.message.clone())).collect_view().into_any()
+}
+
+fn backup_row(store: Store, backup: BackupSchedule, columns: (bool, bool)) -> impl IntoView {
     let (severity, text) = backup_status(backup.state);
     let ago = move |at: Option<i64>| at.map(|t| format::ago(t as f64, store.clock.get())).unwrap_or_else(|| "never".to_string());
     let last = backup.last_success;
@@ -398,7 +379,8 @@ fn backup_row(store: Store, backup: BackupSchedule, stored: bool) -> impl IntoVi
             <td><span class="check-name">{backup.name.clone()}</span>{(!message.is_empty()).then(|| view! { <span class="sub clip" title=message.clone()>{message.clone()}</span> })}</td>
             <td>{last.map(|t| format::hhmm(t as f64)).unwrap_or_default()}<span class="sub">{move || ago(last)}</span></td>
             <td class="hide-sm">{backup.size.clone()}{added.map(|text| view! { <span class="sub">{text}</span> })}</td>
-            {stored.then(|| view! { <td>{destinations(store, &backup)}</td> })}
+            {columns.0.then(|| view! { <td>{repository(&backup)}</td> })}
+            {columns.1.then(|| view! { <td>{mirrors(store, &backup)}</td> })}
             <td class="num">
                 <button class="btn small icon danger" type="button" aria-label="Remove schedule" title="Remove schedule" on:click=remove>
                     <span class="ico" inner_html=icons::TRASH></span>
@@ -412,8 +394,9 @@ fn backup_row(store: Store, backup: BackupSchedule, stored: bool) -> impl IntoVi
 pub fn BackupTable() -> impl IntoView {
     let store = use_store();
     let backups = Memo::new(move |_| store.overview.with(|o| o.as_ref().map(|o| o.backups.clone()).unwrap_or_default()));
-    let stored = Memo::new(move |_| {
-        backups.with(|list| list.iter().any(|b| !b.repository.is_empty() || !b.mirrors.is_empty() || b.mirror_state != BackupState::Unknown))
+    let columns = Memo::new(move |_| {
+        backups
+            .with(|list| (list.iter().any(|b| !b.repository.is_empty()), list.iter().any(|b| !b.mirrors.is_empty() || b.mirror_state != BackupState::Unknown)))
     });
     let empty = move || backups.with(Vec::is_empty);
     view! {
@@ -429,11 +412,12 @@ pub fn BackupTable() -> impl IntoView {
                             <th>"Schedule"</th>
                             <th>"Last success"</th>
                             <th class="hide-sm">"Size"</th>
-                            {move || stored.get().then(|| view! { <th>"Stored in"</th> })}
+                            {move || columns.get().0.then(|| view! { <th>"Repository"</th> })}
+                            {move || columns.get().1.then(|| view! { <th>"Mirror"</th> })}
                             <th></th>
                         </tr>
                     </thead>
-                    <tbody>{move || backups.get().into_iter().map(|b| backup_row(store, b, stored.get())).collect_view()}</tbody>
+                    <tbody>{move || backups.get().into_iter().map(|b| backup_row(store, b, columns.get())).collect_view()}</tbody>
                 </table>
             </div>
         </Show>

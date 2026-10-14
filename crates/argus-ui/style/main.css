@@ -2134,26 +2134,13 @@ li[data-host].drop > .list-item {
   padding: 0;
 }
 
-.dests {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
+.mirror + .mirror {
+  margin-top: 6px;
 }
 
-.dest {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.dest-name {
-  white-space: nowrap;
-}
-
-.dest .sub.clip {
-  max-width: 200px;
+.mirror .sev {
+  margin-right: 6px;
+  vertical-align: -3px;
 }
 
 @media (max-width: 820px) {
@@ -2417,11 +2404,6 @@ li[data-host].drop > .list-item {
   .stack td.mono {
     font-size: 12px;
     color: var(--text-2);
-  }
-
-  .stack .dest {
-    flex-wrap: wrap;
-    row-gap: 2px;
   }
 
   .stack .msg {
