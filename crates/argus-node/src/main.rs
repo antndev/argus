@@ -47,7 +47,7 @@ pub struct App {
     wake: Mutex<Option<Sender<()>>>,
     queue: Mutex<Option<Sender<Message>>>,
     pending: Mutex<HashSet<String>>,
-    sessions: Mutex<HashMap<String, i64>>,
+    logins: Mutex<(i64, u32)>,
     pub argon: tokio::sync::Semaphore,
     pub started: i64,
 }
@@ -79,7 +79,7 @@ impl App {
             wake: Mutex::new(None),
             queue: Mutex::new(None),
             pending: Mutex::new(HashSet::new()),
-            sessions: Mutex::new(HashMap::new()),
+            logins: Mutex::new((0, 0)),
             argon: tokio::sync::Semaphore::new(1),
             started: now_ms(),
         }
@@ -141,8 +141,8 @@ impl App {
         lock(&self.peer)
     }
 
-    pub fn sessions(&self) -> MutexGuard<'_, HashMap<String, i64>> {
-        lock(&self.sessions)
+    pub fn logins(&self) -> MutexGuard<'_, (i64, u32)> {
+        lock(&self.logins)
     }
 
     pub fn snapshots(&self) -> Vec<HostSnapshot> {
@@ -366,6 +366,9 @@ async fn main() {
     }
     let database = path.parent().unwrap_or(Path::new(".")).join(&config.database);
     let db = db::open(&database.to_string_lossy()).unwrap_or_else(|error| fail(format!("cannot open database {}: {error}", database.display())));
+    if resetting && config.peer.as_ref().is_some_and(|peer| peer.url.is_none()) {
+        fail("this node takes its password from the internal node, run reset-password there".to_string());
+    }
     if resetting {
         session::reset(&db, now_ms()).unwrap_or_else(|error| fail(format!("cannot reset the password: {error}")));
         println!("dashboard password removed, open the dashboard within 15 minutes to set a new one");

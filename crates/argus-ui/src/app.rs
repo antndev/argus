@@ -110,6 +110,14 @@ fn Login() -> impl IntoView {
     };
     let form = move || {
         match store.gate.get().as_str() {
+        "pending" => view! {
+            <div>
+                <h1>"Waiting for the internal node"</h1>
+                <p>"This node takes its password from the internal node with the next sync. Set the password there, then check again."</p>
+            </div>
+            <button class="btn primary" type="button" on:click=move |_| store.check_session()>"Check again"</button>
+        }
+        .into_any(),
         "expired" => view! {
             <div>
                 <h1>"Setup time is over"</h1>

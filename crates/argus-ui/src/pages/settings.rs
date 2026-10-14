@@ -905,14 +905,17 @@ fn dashboard(store: Store) -> impl IntoView {
             <input class="input" type="password" autocomplete=autocomplete prop:value=move || value.get() on:input=move |ev| value.set(event_target_value(&ev))/>
         }
     };
+    let follower = move || read(store, "/peer").is_some() && read(store, "/peer/url").is_none();
     view! {
-        <p class="lead">"The password protects this node's dashboard. Only its argon2 hash is stored, in the node's database and never in the config file. If it is lost, run argus-node reset-password on the server and set a new one within 15 minutes."</p>
+        <p class="lead">"One password protects the dashboard on both nodes. Only its argon2 hash is stored, in the database and never in the config file. The internal node shares it with the external one. If it is lost, run argus-node reset-password on the internal node and set a new one within 15 minutes."</p>
+        <Show when=move || !follower() fallback=|| view! { <p class="empty-note">"Change the password on the internal node, it reaches this node with the next sync."</p> }>
         {row("Current password", "", input(current, "current-password"))}
         {row("New password", "At least 10 characters.", input(next, "new-password"))}
         {row("Repeat new password", "", input(repeat, "new-password"))}
-        {row("", "Changing the password signs out every other session.", view! {
+        {row("", "Changing the password signs out every session on both nodes.", view! {
             <button class="btn primary" type="button" disabled=move || busy.get() on:click=change>"Change password"</button>
         })}
+        </Show>
         {row("Session", "", view! { <button class="btn" type="button" on:click=move |_| store.logout()>"Sign out"</button> })}
     }
 }

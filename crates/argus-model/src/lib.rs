@@ -244,6 +244,15 @@ pub struct SyncPayload {
     pub cursor: i64,
     pub config: Option<serde_json::Value>,
     pub history_cleared: i64,
+    pub login: Option<LoginSync>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LoginSync {
+    pub password: Option<String>,
+    pub key: String,
+    pub changed: i64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

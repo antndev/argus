@@ -132,7 +132,10 @@ impl Store {
         let store = *self;
         spawn_local(async move {
             if let Ok(session) = api::get::<serde_json::Value>("/api/v1/session").await {
-                store.gate.set(session["state"].as_str().unwrap_or("login").to_string());
+                let state = session["state"].as_str().unwrap_or("login").to_string();
+                if store.gate.with_untracked(|gate| *gate != state) {
+                    store.gate.set(state);
+                }
             }
         });
     }

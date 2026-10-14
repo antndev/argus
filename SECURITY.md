@@ -51,14 +51,21 @@ changes anything on them.
 
 - The dashboard always needs a login. The password is never stored in the config file, only its argon2 hash in the
   node's database. A node without a password accepts a new one only within 15 minutes after its start or after
-  `argus-node reset-password`, which needs access to the server. Sessions use an HttpOnly, SameSite Strict cookie
-  (Secure behind HTTPS) for 30 days and live in memory. Failed logins wait one second, password checks run one at a
-  time. Changing or resetting the password ends every session.
+  `argus-node reset-password`, which needs access to the server. Sessions are signed with a random key (HMAC SHA-256)
+  and sent as an HttpOnly, SameSite Strict cookie (Secure behind HTTPS) for 30 days. Failed logins wait one second,
+  password checks run one at a time, and after 20 wrong passwords in 10 minutes the node refuses logins for the rest
+  of that window. Changing or resetting the password replaces the key and ends every session. Signing out removes the
+  cookie from that browser only.
+- With two nodes the internal node sends the password hash and the session key to the external node over the
+  authenticated sync. The external node never accepts a new password, neither on first visit nor from the sync
+  response, so a public external node cannot change the login. Whoever controls the external node can read the hash
+  and sign sessions for both nodes, which matters only for someone who can also reach the internal node.
 - The configuration API never returns secrets. They come back as `********`, and a save that keeps `********`
   keeps the stored value. Saves only accept JSON bodies, which a cross-site form cannot send, and fail when the
   configuration changed since it was loaded.
 - A node that should not show the dashboard publicly exposes only `/api/v1/ingest`, `/api/v1/sync` and the receipt
-  paths through its reverse proxy, the dashboard stays reachable through an SSH tunnel.
+  paths through its reverse proxy, the dashboard stays reachable through an SSH tunnel. Serving the whole dashboard
+  publicly, for one name on both nodes, puts the login page on the internet; use a long password.
 
 ### Known limits
 

@@ -55,9 +55,15 @@ for a new one; this only works within 15 minutes after the node starts, so nobod
 unconfigured node later. The node keeps only the argon2 hash, in its database. Change it under Settings, Password.
 If it is lost, run `argus-node reset-password` on the server (in Docker:
 `docker exec argus-node /argus-node reset-password --config /data/argus.json`) and set a new one within 15 minutes.
+With two nodes the internal node owns the password and hands it to the external node with every sync, together with
+the key that signs sessions, so one login works on both. Set, change and reset it on the internal node.
 
 A naming suggestion for two nodes: `argus.internal.example.com` for the internal node with the dashboard, reachable
 only inside your network, and `argus.external.example.com` for the external node that is reachable from the internet.
+
+To open the phone app at home and on the road, give both nodes one name instead, for example `argus.example.com`:
+your internal DNS points it to the internal node, public DNS to the external node, and the external node serves the
+whole dashboard. The app then talks to whichever node it reaches, with the same login and the same push subscription.
 
 `crates/argus-node/node.example.json` shows every option. The important parts:
 
@@ -78,7 +84,8 @@ only inside your network, and `argus.external.example.com` for the external node
 
 Removing a host from `agents` also removes it from the dashboard. Its history stays until retention removes it.
 
-Run the node behind a reverse proxy that terminates TLS. Example with Caddy for a node whose dashboard stays private:
+Run the node behind a reverse proxy that terminates TLS. With one name for both nodes a plain
+`reverse_proxy argus-node:8090` is enough. Example with Caddy for an external node whose dashboard stays private:
 
 ```
 argus.external.example.com {

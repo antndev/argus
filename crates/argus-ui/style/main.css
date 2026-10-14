@@ -1541,19 +1541,14 @@ td .sev {
   display: grid;
   place-items: center;
   padding: 24px 16px;
-  background: var(--bg-side);
+  background: var(--bg);
 }
 
 .login-card {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  width: min(100%, 380px);
-  padding: 28px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--bg);
-  box-shadow: var(--lift);
+  width: min(100%, 360px);
   animation: rise 0.45s var(--ease) both;
 }
 
@@ -1587,10 +1582,14 @@ td .sev {
 }
 
 .login-error {
-  min-height: 16px;
+  height: 18px;
   margin: -6px 0;
   font-size: 12px;
+  line-height: 18px;
   color: var(--err);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .split {

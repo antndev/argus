@@ -46,6 +46,7 @@ fn build(app: &App, now: i64, cursor: i64, with_samples: bool) -> SyncPayload {
         backups: db::backups(&db),
         config: serde_json::to_value(&config.shared).ok(),
         history_cleared: db::history_cleared(&db),
+        login: config.initiates_sync().then(|| crate::session::export(&db)),
     }
 }
 
@@ -90,6 +91,12 @@ pub fn merge(app: &App, payload: SyncPayload, initiator: bool) {
             let _ = db::mark_delivered(&db, id, *at);
         }
         let _ = db::clear_history(&db, payload.history_cleared);
+        if !initiator
+            && let Some(login) = &payload.login
+            && crate::session::adopt(&db, login).unwrap_or(false)
+        {
+            log("took over the dashboard login of the internal node");
+        }
         for event in &payload.events {
             let _ = db::save_event(&db, event);
         }
@@ -256,6 +263,21 @@ mod tests {
         assert_eq!(home.config().shared.rules.len(), 1);
         merge(&vps, build(&home, 0, 0, false), false);
         assert_eq!(vps.config().shared.rules.len(), 1);
+    }
+
+    #[test]
+    fn the_login_only_travels_from_the_internal_node() {
+        let mut config = Config { name: "home".into(), ..Default::default() };
+        config.peer = Some(Peer { name: "vps".into(), url: Some("https://vps.example.com".into()), token: "secret-secret-secret".into() });
+        let home = App::new(config, db::open(":memory:").expect("db"));
+        let vps = app("vps");
+        db::create_secret(&home.db(), "dashboard_password", "hash").expect("store");
+        assert!(build(&vps, 0, 0, true).login.is_none());
+        merge(&vps, build(&home, 0, 0, false), false);
+        assert_eq!(db::secret(&vps.db(), "dashboard_password").as_deref(), Some("hash"));
+        db::set_secret(&vps.db(), "dashboard_password", "other").expect("store");
+        merge(&home, build(&vps, 0, 0, true), true);
+        assert_eq!(db::secret(&home.db(), "dashboard_password").as_deref(), Some("hash"));
     }
 
     #[test]
