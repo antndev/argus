@@ -54,7 +54,7 @@ pub struct ChartSpec {
     title: String,
     note: String,
     unit: Unit,
-    series: Vec<(String, String)>,
+    series: Vec<(String, String, f64)>,
     max: Option<f64>,
     floor: f64,
     thresholds: Vec<(f64, String)>,
@@ -65,8 +65,12 @@ impl ChartSpec {
         Self { host: host.to_string(), title: title.to_string(), note: note.into(), unit, series: Vec::new(), max: None, floor: 0.0, thresholds: Vec::new() }
     }
 
-    pub fn series(mut self, label: &str, key: String) -> Self {
-        self.series.push((label.to_string(), key));
+    pub fn series(self, label: &str, key: String) -> Self {
+        self.scaled(label, key, 1.0)
+    }
+
+    pub fn scaled(mut self, label: &str, key: String, factor: f64) -> Self {
+        self.series.push((label.to_string(), key, factor));
         self
     }
 
@@ -91,14 +95,14 @@ impl ChartSpec {
             "unit": self.unit.key(),
             "max": self.max,
             "floor": self.floor,
-            "series": self.series.iter().map(|(label, _)| label).collect::<Vec<_>>(),
+            "series": self.series.iter().map(|(label, _, _)| label).collect::<Vec<_>>(),
             "thresholds": thresholds,
         })
         .to_string()
     }
 
     fn url(&self, range: Range) -> String {
-        let keys = self.series.iter().map(|(_, key)| key.as_str()).collect::<Vec<_>>().join(",");
+        let keys = self.series.iter().map(|(_, key, _)| key.as_str()).collect::<Vec<_>>().join(",");
         format!("/api/v1/series?host={}&keys={}&range={}", api::encode(&self.host), api::encode(&keys), range.seconds())
     }
 }
@@ -116,7 +120,8 @@ pub fn Chart(spec: ChartSpec) -> impl IntoView {
     let unit = spec.unit;
     let title = spec.title.clone();
     let note = spec.note.clone();
-    let labels: Vec<String> = spec.series.iter().map(|(label, _)| label.clone()).collect();
+    let labels: Vec<String> = spec.series.iter().map(|(label, _, _)| label.clone()).collect();
+    let factors: Vec<f64> = spec.series.iter().map(|(_, _, factor)| *factor).collect();
     let spec = StoredValue::new(spec);
 
     Effect::new(move |_| {
@@ -125,12 +130,16 @@ pub fn Chart(spec: ChartSpec) -> impl IntoView {
         let Some(element) = node.get() else { return };
         let url = spec.with_value(|s| s.url(range));
         let json = json.clone();
+        let factors = factors.clone();
         let sequence = request.get_value() + 1;
         request.set_value(sequence);
         spawn_local(async move {
-            let Ok(data) = api::get::<SeriesData>(&url).await else {
+            let Ok(mut data) = api::get::<SeriesData>(&url).await else {
                 return;
             };
+            for (column, factor) in data.values.iter_mut().zip(&factors) {
+                column.iter_mut().flatten().for_each(|value| *value *= factor);
+            }
             if request.try_get_value() != Some(sequence) {
                 return;
             }

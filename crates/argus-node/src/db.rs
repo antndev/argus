@@ -6,7 +6,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::config::Retention;
-use crate::util::{DAY, HOUR, MINUTE};
+use crate::util::{DAY, HOUR, MINUTE, glob};
 
 pub type Db = Connection;
 
@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, time INTEGER NOT NULL,
 CREATE TABLE IF NOT EXISTS sent (id TEXT PRIMARY KEY, time INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS secrets (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS receipts (id TEXT PRIMARY KEY, time INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS deliveries (id TEXT PRIMARY KEY, time INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS backups (name TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS events_time ON events (time);
@@ -117,19 +118,22 @@ pub fn query_series(db: &Db, host: &str, keys: &[String], from: i64, to: i64, re
     let start = from / step * step;
     let times: Vec<i64> = (0..).map(|i| start + i * step).take_while(|t| *t <= to).collect();
     let sql = format!("SELECT (time / ?2) * ?2 AS bucket, avg(value) FROM {table} WHERE series = ?1 AND time >= ?3 AND time <= ?4 GROUP BY bucket");
+    let known: Vec<(i64, String)> = db
+        .prepare_cached("SELECT id, key FROM series WHERE host = ?1")
+        .and_then(|mut s| s.query_map([host], |row| Ok((row.get(0)?, row.get(1)?))).map(|rows| rows.filter_map(Result::ok).collect()))
+        .unwrap_or_default();
     let values = keys
         .iter()
         .map(|key| {
-            let mut buckets = BTreeMap::new();
-            let id: Option<i64> = db
-                .prepare_cached("SELECT id FROM series WHERE host = ?1 AND key = ?2")
-                .and_then(|mut s| s.query_row(params![host, key], |row| row.get(0)).optional())
-                .ok()
-                .flatten();
-            if let (Some(id), Ok(mut statement)) = (id, db.prepare_cached(&sql))
-                && let Ok(rows) = statement.query_map(params![id, step, start, to], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?)))
-            {
-                buckets.extend(rows.filter_map(Result::ok));
+            let mut buckets: BTreeMap<i64, f64> = BTreeMap::new();
+            for (id, _) in known.iter().filter(|(_, name)| if key.contains('*') { glob(key, name) } else { name == key }) {
+                if let Ok(mut statement) = db.prepare_cached(&sql)
+                    && let Ok(rows) = statement.query_map(params![id, step, start, to], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?)))
+                {
+                    for (bucket, value) in rows.filter_map(Result::ok) {
+                        *buckets.entry(bucket).or_default() += value;
+                    }
+                }
             }
             times.iter().map(|t| buckets.get(t).copied()).collect()
         })
@@ -163,6 +167,7 @@ pub fn compact(db: &mut Db, now: i64, retention: &Retention) -> rusqlite::Result
     tx.execute("DELETE FROM messages WHERE time < ?1", [now - 7 * DAY])?;
     tx.execute("DELETE FROM sent WHERE time < ?1", [now - 7 * DAY])?;
     tx.execute("DELETE FROM receipts WHERE time < ?1", [now - 7 * DAY])?;
+    tx.execute("DELETE FROM deliveries WHERE time < ?1", [now - 7 * DAY])?;
     tx.execute("DELETE FROM events WHERE time < ?1", [now - 30 * DAY])?;
     tx.commit()
 }
@@ -209,7 +214,8 @@ pub fn events(db: &Db, limit: usize) -> Vec<Event> {
 }
 
 pub fn save_event(db: &Db, event: &Event) -> rusqlite::Result<()> {
-    if event.time <= history_cleared(db) {
+    let cleared = history_cleared(db);
+    if cleared > 0 && event.time <= cleared {
         return Ok(());
     }
     db.prepare_cached("INSERT OR IGNORE INTO events (id, time, data) VALUES (?1, ?2, ?3)")?.execute(params![event.id, event.time, json(event)])?;
@@ -262,10 +268,19 @@ pub fn mark_delivered(db: &Db, id: &str, at: i64) -> rusqlite::Result<()> {
     Ok(())
 }
 
+pub fn delivered(db: &Db, key: &str) -> bool {
+    db.query_row("SELECT 1 FROM deliveries WHERE id = ?1", [key], |_| Ok(())).optional().ok().flatten().is_some()
+}
+
+pub fn mark_delivery(db: &Db, key: &str, time: i64) -> rusqlite::Result<()> {
+    db.execute("INSERT OR IGNORE INTO deliveries (id, time) VALUES (?1, ?2)", params![key, time])?;
+    Ok(())
+}
+
 pub fn marks(db: &Db, table: Marks, since: i64) -> Vec<(String, i64)> {
     let sql = match table {
         Marks::Sent => "SELECT id, time FROM sent WHERE time > ?1",
-        Marks::Receipts => "SELECT id, time FROM receipts WHERE time > ?1",
+        Marks::Receipts => "SELECT r.id, r.time FROM receipts r JOIN messages m ON m.id = r.id WHERE r.time > ?1",
     };
     let Ok(mut statement) = db.prepare_cached(sql) else { return Vec::new() };
     statement.query_map([since], |row| Ok((row.get(0)?, row.get(1)?))).map(|rows| rows.filter_map(Result::ok).collect()).unwrap_or_default()
@@ -349,6 +364,27 @@ mod tests {
         let raw: i64 = db.query_row("SELECT count(*) FROM samples", [], |r| r.get(0)).expect("count");
         assert_eq!(raw, 0);
         assert_eq!(samples_since(&db, &["h".into()], 0, 10).len(), 0);
+    }
+
+    #[test]
+    fn wildcard_keys_sum_their_series() {
+        let mut db = open(":memory:").expect("db");
+        let base = 1_000 * DAY;
+        let memory = |name: &str, value: f64| Sample { host: "h".into(), key: format!("docker|{name}|memory"), time: base, value };
+        insert_samples(&mut db, &[memory("web", 100.0), memory("db", 250.0), sample(base, 5.0)]).expect("insert");
+        let data = query_series(&db, "h", &["docker|*|memory".into(), "cpu||total".into()], base, base + HOUR, &retention());
+        assert_eq!(data.values[0].iter().flatten().copied().collect::<Vec<_>>(), [350.0]);
+        assert_eq!(data.values[1].iter().flatten().copied().collect::<Vec<_>>(), [5.0]);
+    }
+
+    #[test]
+    fn deliveries_are_remembered_per_device_for_a_week() {
+        let mut db = open(":memory:").expect("db");
+        mark_delivery(&db, "m1|a", 1_000).expect("mark");
+        assert!(delivered(&db, "m1|a"));
+        assert!(!delivered(&db, "m1|b"));
+        compact(&mut db, 1_000 + 8 * DAY, &retention()).expect("compact");
+        assert!(!delivered(&db, "m1|a"));
     }
 
     #[test]

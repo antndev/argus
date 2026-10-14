@@ -108,6 +108,8 @@ node that is reachable from the internet.
 
 ### Linux in Docker
 
+One container per machine. On a host without a node:
+
 ```yaml
 services:
   argus-agent:
@@ -121,22 +123,37 @@ services:
     volumes:
       - /:/host:ro,rslave
       - ./agent.toml:/etc/argus/agent.toml:ro
-
-  socket-proxy:
-    image: tecnativa/docker-socket-proxy:v0.5.0
-    environment:
-      CONTAINERS: 1
-      LOG_LEVEL: warning
-    ports: ["127.0.0.1:2375:2375"]
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
 ```
 
-Set `root = "/host"` and, because the agent uses the host network, `docker = "http://127.0.0.1:2375"` in the agent
-config. `rslave` makes filesystems mounted after the container started (a late RAID, a remount after maintenance)
-visible to the agent; Docker Desktop does not support it, drop it there. For NVMe SMART add
-`devices: ["/dev/nvme0"]` and `cap_add: [SYS_ADMIN]`. `LOG_LEVEL: warning` keeps the proxy from logging every request
-the agent makes.
+Set `root = "/host"` and `docker = "/var/lib/docker"` in the agent config. The agent reads the containers from
+Docker's data directory and their CPU and memory from the cgroups, both through the read-only host mount, so it never
+touches the Docker socket. `rslave` makes filesystems mounted after the container started (a late RAID, a remount
+after maintenance) visible to the agent; Docker Desktop does not support it, drop it there. For NVMe SMART add
+`devices: ["/dev/nvme0"]` and `cap_add: [SYS_ADMIN]`.
+
+On a host that runs a node, the node image brings the agent along. Put `agent.toml` next to `argus.json` and the node
+starts the agent as its own process:
+
+```yaml
+services:
+  argus:
+    image: ghcr.io/antndev/argus-node:latest
+    user: "0:0"
+    pid: host
+    network_mode: host
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [SETUID, SETGID]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    volumes:
+      - /:/host:ro,rslave
+      - ./argus:/data
+```
+
+The agent needs root to read Docker's data directory. The node starts it, then gives up root and runs as user 65534,
+so the part that answers on the network never runs as root. `./argus` belongs to 65534. With the host network the
+node listens on its `listen` address directly; use `127.0.0.1:8090` when the reverse proxy runs on the same host.
 
 Leave `systemd` off in a container. The collector asks the host's D-Bus for failed units, and the default AppArmor
 profile of Docker on Ubuntu blocks that connection. The native binary on a Linux host can use it.

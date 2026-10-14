@@ -50,6 +50,13 @@ pub async fn ingest(State(app): State<Arc<App>>, request: Request) -> Response {
     if report.host.id != host {
         return StatusCode::FORBIDDEN.into_response();
     }
+    if config.peer.as_ref().is_some_and(|peer| report.host.site != config.name && report.host.site != peer.name) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("unknown site {:?}, use {:?} or {:?}", report.host.site, config.name, config.peer_name().unwrap_or_default()),
+        )
+            .into_response();
+    }
     app.store_report(report, now_ms());
     Json(IngestReply { checks: config.shared.checks.get(&host).cloned().unwrap_or_default() }).into_response()
 }
@@ -66,6 +73,7 @@ pub async fn overview(State(app): State<Arc<App>>) -> Json<Overview> {
         let alerts: Vec<Alert> = db::alerts(&db).into_iter().filter(|a| a.state == AlertState::Firing).collect();
         let backups = db::backups(&db)
             .into_iter()
+            .filter(|b| !b.removed)
             .map(|b| BackupSchedule { message: zerobyte::readable(&b.message), mirror_message: zerobyte::readable(&b.mirror_message), ..b })
             .collect();
         (alerts, backups)
@@ -102,11 +110,10 @@ pub async fn overview(State(app): State<Arc<App>>) -> Json<Overview> {
     }));
     hosts.sort_by_key(|h| config.shared.order.iter().position(|id| *id == h.info.id).unwrap_or(usize::MAX));
     let internal = config.peer.is_none() || config.initiates_sync();
-    let mut nodes = vec![NodeStatus { name: me.clone(), site: me, this: true, internal, reachable: true, last_sync: app.peer_state().last_sync }];
+    let mut nodes = vec![NodeStatus { name: me, this: true, internal, reachable: true, last_sync: app.peer_state().last_sync }];
     if let Some(peer) = &config.peer {
         nodes.push(NodeStatus {
             name: peer.name.clone(),
-            site: peer.name.clone(),
             this: false,
             internal: !internal,
             reachable: !app.peer_down(now),
@@ -175,21 +182,27 @@ pub struct ConfigUpdate {
     config: Config,
 }
 
+const CHANGED: &str = "the configuration changed in the meantime, reload and try again";
+
 pub async fn put_config(State(app): State<Arc<App>>, Json(update): Json<ConfigUpdate>) -> Response {
-    let current = app.config();
-    if update.version != version(&current) {
-        return (StatusCode::CONFLICT, "the configuration changed in the meantime, reload and try again").into_response();
-    }
-    let mut next = update.config;
-    if let Err(error) = next.restore(&current) {
-        return (StatusCode::BAD_REQUEST, error).into_response();
-    }
     let worker = app.clone();
-    match tokio::task::spawn_blocking(move || worker.apply_config(next, true)).await {
+    let saved = tokio::task::spawn_blocking(move || {
+        worker.edit_config(true, |current| {
+            if update.version != version(current) {
+                return Err(CHANGED.to_string());
+            }
+            let mut next = update.config;
+            next.restore(current)?;
+            Ok(next)
+        })
+    })
+    .await;
+    match saved {
         Ok(Ok(_)) => {
             app.wake_sync();
             Json(config_view(&app)).into_response()
         }
+        Ok(Err(error)) if error == CHANGED => (StatusCode::CONFLICT, error).into_response(),
         Ok(Err(error)) => (StatusCode::BAD_REQUEST, error).into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
@@ -217,10 +230,15 @@ pub struct Order {
 }
 
 pub async fn order(State(app): State<Arc<App>>, Json(order): Json<Order>) -> Response {
-    let mut next = (*app.config()).clone();
-    next.shared.order = order.hosts.into_iter().filter(|id| next.shared.agents.contains_key(id)).collect();
     let worker = app.clone();
-    match tokio::task::spawn_blocking(move || worker.apply_config(next, true)).await {
+    let edit = move || {
+        worker.edit_config(true, |current| {
+            let mut next = current.clone();
+            next.shared.order = order.hosts.into_iter().filter(|id| next.shared.agents.contains_key(id)).collect();
+            Ok(next)
+        })
+    };
+    match tokio::task::spawn_blocking(edit).await {
         Ok(Ok(_)) => {
             app.wake_sync();
             StatusCode::NO_CONTENT.into_response()

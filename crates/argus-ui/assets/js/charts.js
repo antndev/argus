@@ -78,6 +78,10 @@ window.argusCharts = (() => {
     ctx.restore();
   }
 
+  function escape(text) {
+    return String(text).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+  }
+
   function tooltip(spec, colors) {
     let tip;
     const format = formats[spec.unit] || formats.load;
@@ -96,7 +100,10 @@ window.argusCharts = (() => {
             return;
           }
           const rows = spec.series
-            .map((label, j) => `<div class="chart-tip-row"><i style="background:${colors[j]}"></i><span>${label}</span><b>${format(u.data[j + 1][i])}</b></div>`)
+            .map((label, j) => {
+              const value = u.data[j + 1][i];
+              return `<div class="chart-tip-row"><i style="background:${colors[j]}"></i><span>${escape(label)}</span><b>${value == null ? "n/a" : format(value)}</b></div>`;
+            })
             .join("");
           tip.innerHTML = `<div class="chart-tip-time">${stamp(u.data[0][i])}</div>${rows}`;
           tip.hidden = false;

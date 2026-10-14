@@ -137,7 +137,7 @@ fn body_failure(body: &str, contains: Option<&str>, json: &[JsonAssertion]) -> O
             (None, _) => false,
         };
         (!equal).then(|| match actual {
-            Some(actual) => format!("{} is {actual}, expected {}", assertion.path, assertion.equals),
+            Some(_) => format!("{} is not {}", assertion.path, assertion.equals),
             None => format!("{} is missing", assertion.path),
         })
     })
@@ -232,7 +232,7 @@ fn wait_reply(mut socket: &Socket, kind: u8, sequence: u16, payload: &[u8], dead
     let mut buffer = [0u8; 1500];
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() || socket.set_read_timeout(Some(remaining)).is_err() {
+        if remaining < Duration::from_millis(1) || socket.set_read_timeout(Some(remaining)).is_err() {
             return false;
         }
         match socket.read(&mut buffer) {
@@ -368,7 +368,7 @@ mod tests {
             assertion("nodes.0.name", json!("a")),
         ];
         assert_eq!(body_failure(body, Some("connected"), &passing), None);
-        assert_eq!(body_failure(body, None, &[assertion("status", json!("down"))]).as_deref(), Some("status is \"ok\", expected \"down\""));
+        assert_eq!(body_failure(body, None, &[assertion("status", json!("down"))]).as_deref(), Some("status is not \"down\""));
         assert_eq!(body_failure(body, None, &[assertion("db.missing", json!(1))]).as_deref(), Some("db.missing is missing"));
         assert_eq!(body_failure(body, Some("nope"), &[]).as_deref(), Some("Body does not contain \"nope\""));
         assert_eq!(body_failure("<html>", None, &passing).as_deref(), Some("Body is not JSON"));

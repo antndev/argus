@@ -2,15 +2,12 @@ use std::collections::HashMap;
 use std::fs::{self, File};
 use std::os::fd::AsRawFd;
 use std::path::Path;
-use std::time::Duration;
+use std::process::Command;
 
 use argus_model::{Raid, Sensor, Smart};
-use zbus::zvariant::OwnedObjectPath;
 
 use crate::collect::{CpuTimes, Memory, Mount};
 use crate::linux_parse::{self, Hwmon};
-
-type Unit = (String, String, String, String, String, String, OwnedObjectPath, u32, String, OwnedObjectPath);
 
 #[repr(C)]
 #[derive(Default)]
@@ -123,21 +120,17 @@ pub fn smart(device: &str) -> Result<Smart, String> {
 }
 
 pub fn failed_units(root: &str) -> Result<Vec<String>, String> {
-    let builder = if root.is_empty() {
-        zbus::blocking::connection::Builder::system()
-    } else {
-        zbus::blocking::connection::Builder::address(format!("unix:path={root}/run/dbus/system_bus_socket").as_str())
-    };
-    let connection = builder.and_then(|b| b.method_timeout(Duration::from_secs(5)).build()).map_err(|e| e.to_string())?;
-    let reply = connection
-        .call_method(
-            Some("org.freedesktop.systemd1"),
-            "/org/freedesktop/systemd1",
-            Some("org.freedesktop.systemd1.Manager"),
-            "ListUnitsFiltered",
-            &(vec!["failed"],),
-        )
-        .map_err(|e| e.to_string())?;
-    let units: Vec<Unit> = reply.body().deserialize().map_err(|e| e.to_string())?;
-    Ok(units.into_iter().map(|unit| unit.0).collect())
+    if !root.is_empty() {
+        return Err("failed units need the native agent".into());
+    }
+    let output =
+        Command::new("systemctl").args(["list-units", "--state=failed", "--plain", "--no-legend", "--no-pager"]).output().map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).lines().filter_map(|line| line.split_whitespace().next()).map(str::to_string).collect())
+}
+
+pub fn pools() -> Vec<(String, u64, u64)> {
+    Vec::new()
 }

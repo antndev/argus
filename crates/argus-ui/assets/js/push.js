@@ -7,11 +7,11 @@
 
   window.argusPush = {
     state() {
-      if (!supported()) return "unsupported";
       if (!window.isSecureContext) return "insecure";
       const standalone = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
       const apple = /iPhone|iPad|iPod/.test(navigator.userAgent);
       if (apple && !standalone) return "install";
+      if (!supported()) return "unsupported";
       return Notification.permission === "denied" ? "denied" : "ready";
     },
     async subscribe(key) {

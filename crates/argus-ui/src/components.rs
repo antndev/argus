@@ -1,4 +1,4 @@
-use argus_model::{Alert, BackupSchedule, BackupState, CheckResult, CheckStatus, HostSummary, SeriesData, Severity};
+use argus_model::{Alert, BackupSchedule, BackupState, CheckResult, CheckStatus, HostSummary, SeriesData, Severity, metric_key};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
@@ -6,7 +6,7 @@ use crate::api;
 use crate::format;
 use crate::icons;
 use crate::route::Route;
-use crate::store::{Store, fullest, hottest, key, latest, use_store};
+use crate::store::{Store, fullest, hottest, latest, use_store};
 
 pub fn class(severity: Severity) -> &'static str {
     match severity {
@@ -20,7 +20,7 @@ pub fn class(severity: Severity) -> &'static str {
 pub fn label(severity: Severity) -> &'static str {
     match severity {
         Severity::Ok => "OK",
-        Severity::Muted => "Muted",
+        Severity::Muted => "Waiting",
         Severity::Warning => "Warning",
         Severity::Critical => "Critical",
     }
@@ -122,7 +122,7 @@ pub fn Sparkline(host: String, index: usize) -> impl IntoView {
     let store = use_store();
     let values = RwSignal::new(Vec::<Option<f64>>::new());
     let minute = Memo::new(move |_| (store.clock.get() / 60_000.0).floor() as i64);
-    let url = format!("/api/v1/series?host={}&keys={}&range=3600", api::encode(&host), api::encode(&key("cpu", "", "total")));
+    let url = format!("/api/v1/series?host={}&keys={}&range=3600", api::encode(&host), api::encode(&metric_key("cpu", "", "total")));
     Effect::new(move |_| {
         minute.track();
         let url = url.clone();
@@ -143,6 +143,52 @@ pub fn Sparkline(host: String, index: usize) -> impl IntoView {
                 <span class="end" style=move || format!("top:{:.1}%", shape.with(|s| s.2))></span>
             </Show>
         </div>
+    }
+}
+
+pub fn drag_start(store: Store, id: String) -> impl Fn(leptos::ev::DragEvent) + 'static {
+    move |ev| {
+        if let Some(data) = ev.data_transfer() {
+            let _ = data.set_data("text/plain", &id);
+        }
+        store.dragging.set(Some(id.clone()));
+    }
+}
+
+pub fn drag_over(store: Store, target: RwSignal<bool>) -> impl Fn(leptos::ev::DragEvent) + 'static {
+    move |ev| {
+        ev.prevent_default();
+        target.set(store.dragging.with_untracked(Option::is_some));
+    }
+}
+
+pub fn drop_on(store: Store, id: String, target: RwSignal<bool>) -> impl Fn(leptos::ev::DragEvent) + 'static {
+    move |ev| {
+        ev.prevent_default();
+        target.set(false);
+        if let Some(from) = store.dragging.get_untracked().filter(|from| *from != id)
+            && let Some(to) = store.host_ids().iter().position(|h| *h == id)
+        {
+            store.move_host(&from, to);
+        }
+        store.dragging.set(None);
+    }
+}
+
+pub fn move_keys(store: Store, id: String) -> impl Fn(leptos::ev::KeyboardEvent) + 'static {
+    move |ev| {
+        if !ev.alt_key() {
+            return;
+        }
+        let step: isize = match ev.key().as_str() {
+            "ArrowLeft" | "ArrowUp" => -1,
+            "ArrowRight" | "ArrowDown" => 1,
+            _ => return,
+        };
+        ev.prevent_default();
+        if let Some(at) = store.host_ids().iter().position(|h| *h == id) {
+            store.move_host(&id, at.saturating_add_signed(step));
+        }
     }
 }
 
@@ -174,32 +220,9 @@ pub fn HostCard(id: String, index: usize) -> impl IntoView {
     let heat = move || host.with(|h| h.as_ref().and_then(hottest));
     let has_heat = move || heat().is_some();
     let href = Route::Host(id.clone()).href();
-    let (drag_id, drop_id, key_id, dragged) = (id.clone(), id.clone(), id.clone(), id.clone());
+    let dragged = id.clone();
+    let spark = StoredValue::new(id.clone());
     let target = RwSignal::new(false);
-    let drop = move |ev: leptos::ev::DragEvent| {
-        ev.prevent_default();
-        target.set(false);
-        if let Some(from) = store.dragging.get_untracked().filter(|from| *from != drop_id)
-            && let Some(to) = store.host_ids().iter().position(|h| *h == drop_id)
-        {
-            store.move_host(&from, to);
-        }
-        store.dragging.set(None);
-    };
-    let keys = move |ev: leptos::ev::KeyboardEvent| {
-        if !ev.alt_key() {
-            return;
-        }
-        let step: isize = match ev.key().as_str() {
-            "ArrowLeft" | "ArrowUp" => -1,
-            "ArrowRight" | "ArrowDown" => 1,
-            _ => return,
-        };
-        ev.prevent_default();
-        if let Some(at) = store.host_ids().iter().position(|h| *h == key_id) {
-            store.move_host(&key_id, at.saturating_add_signed(step));
-        }
-    };
     view! {
         <a
             class=move || format!("host-card {}", class(state()))
@@ -210,34 +233,23 @@ pub fn HostCard(id: String, index: usize) -> impl IntoView {
             style=format!("--i:{index}")
             draggable="true"
             aria-keyshortcuts="Alt+ArrowLeft Alt+ArrowRight"
-            on:dragstart=move |ev: leptos::ev::DragEvent| {
-                if let Some(data) = ev.data_transfer() {
-                    let _ = data.set_data("text/plain", &drag_id);
-                }
-                store.dragging.set(Some(drag_id.clone()));
-            }
+            on:dragstart=drag_start(store, id.clone())
             on:dragend=move |_| store.dragging.set(None)
-            on:dragover=move |ev: leptos::ev::DragEvent| {
-                ev.prevent_default();
-                target.set(store.dragging.with_untracked(Option::is_some));
-            }
+            on:dragover=drag_over(store, target)
             on:dragleave=move |_| target.set(false)
-            on:drop=drop
-            on:keydown=keys
+            on:drop=drop_on(store, id.clone(), target)
+            on:keydown=move_keys(store, id.clone())
         >
             <div class="hc-id">
                 <div class="hc-top">
                     <span class="hc-name">{id.clone()}</span>
-                    {move || if waiting() {
-                        view! { <span class="pill muted"><span class="ico" inner_html=icons::WAITING></span>"Waiting"</span> }.into_any()
-                    } else {
-                        view! { <Pill severity=state()/> }.into_any()
-                    }}
+                    {move || view! { <Pill severity=state()/> }}
                 </div>
                 <div class="hc-meta">{meta}</div>
                 <div class="hc-foot">{seen}</div>
             </div>
-            <Sparkline host=id.clone() index=index/>
+            <Show when=move || !waiting()>
+            <Sparkline host=spark.get_value() index=index/>
             <dl class="hc-m">
                 {meter(
                     || "CPU".to_string(),
@@ -262,13 +274,14 @@ pub fn HostCard(id: String, index: usize) -> impl IntoView {
                     fallback=|| view! { <div class="m"><dt>"Temperature"</dt><dd><span class="mv dim">"No sensors"</span></dd></div> }
                 >
                     {meter(
-                        move || heat().map(|(name, _, _)| name).unwrap_or_default(),
+                        || "Temperature".to_string(),
                         move || heat().map(|(_, v, _)| format::celsius(v)).unwrap_or_default(),
                         move || heat().map(|(_, v, limit)| v / limit * 100.0).unwrap_or_default(),
                         move || heat().is_some_and(|(_, v, limit)| v >= limit),
                     )}
                 </Show>
             </dl>
+            </Show>
         </a>
     }
 }
@@ -279,7 +292,7 @@ pub fn AlertList(#[prop(optional, into)] host: Option<String>) -> impl IntoView 
     let only = host.clone();
     let rows = move || store.alerts().into_iter().filter(|alert| only.as_ref().is_none_or(|h| &alert.host == h)).collect::<Vec<_>>();
     let scoped = host.is_some();
-    let clear = move || !scoped && store.loaded() && store.active_count() == 0;
+    let clear = move || !scoped && store.loaded() && store.alerts().is_empty();
     view! {
         <div class="alert-list">
             <Show when=clear>
@@ -303,7 +316,7 @@ fn alert_row(store: Store, alert: Alert, link: bool) -> impl IntoView {
         <div class=format!("alert-row {}", class(alert.severity))>
             {sev_icon(alert.severity)}
             <div class="ar-body">
-                <div><span class="ar-host">{alert.host.clone()}</span>{alert.title.clone()}</div>
+                <div><span class="ar-host">{if alert.host == "zerobyte" { "ZeroByte".to_string() } else { alert.host.clone() }}</span>{alert.title.clone()}</div>
                 {(!detail.is_empty()).then(|| view! { <div class="ar-detail" title=full>{detail}</div> })}
                 <div class="ar-meta">{age}</div>
             </div>
@@ -329,7 +342,7 @@ pub fn ServiceList() -> impl IntoView {
     let empty = move || store.loaded() && checks.with(Vec::is_empty);
     view! {
         <Show when=empty>
-            <p class="meta">"No checks yet. Add them under Settings, Checks."</p>
+            <p class="meta">"No services yet. Add them under Settings, Services."</p>
         </Show>
         <ul class="svc sheet">
             {move || {
@@ -352,24 +365,77 @@ pub fn ServiceList() -> impl IntoView {
     }
 }
 
-fn backup_row(store: Store, backup: BackupSchedule) -> impl IntoView {
+fn destinations(store: Store, backup: &BackupSchedule) -> impl IntoView + use<> {
+    let ago = move |at: Option<i64>| at.map(|t| format::ago(t as f64, store.clock.get())).unwrap_or_else(|| "not synced yet".to_string());
+    let primary = (!backup.repository.is_empty()).then(|| {
+        view! {
+            <div class="dest">
+                <span class="tag">{backup.repository_kind.clone()}</span>
+                <span class="dest-name">{backup.repository.clone()}</span>
+            </div>
+        }
+    });
+    let mirrors = backup
+        .mirrors
+        .iter()
+        .map(|mirror| {
+            let (severity, text) = backup_status(mirror.state);
+            let (finished, message) = (mirror.finished, mirror.message.clone());
+            let detail = move || if message.is_empty() { ago(finished) } else { message.clone() };
+            view! {
+                <div class="dest mirror">
+                    <span class="tag">{mirror.kind.clone()}</span>
+                    <span class="dest-name">{mirror.repository.clone()}</span>
+                    <Pill severity=severity text=text/>
+                    <span class="sub clip" title=mirror.message.clone()>{detail}</span>
+                </div>
+            }
+        })
+        .collect_view();
+    let fallback = (backup.repository.is_empty() && backup.mirrors.is_empty() && backup.mirror_state != BackupState::Unknown).then(|| {
+        let (severity, text) = backup_status(backup.mirror_state);
+        let (finished, message, title) = (backup.mirror_finished, backup.mirror_message.clone(), backup.mirror_message.clone());
+        view! {
+            <div class="dest mirror">
+                <span class="dest-name">"Mirror"</span>
+                <Pill severity=severity text=text/>
+                <span class="sub clip" title=title>{move || if message.is_empty() { ago(finished) } else { message.clone() }}</span>
+            </div>
+        }
+    });
+    view! { <div class="dests">{primary}{mirrors}{fallback}</div> }
+}
+
+fn backup_row(store: Store, backup: BackupSchedule, stored: bool) -> impl IntoView {
     let (severity, text) = backup_status(backup.state);
-    let (mirror_severity, mirror_text) = backup_status(backup.mirror_state);
     let ago = move |at: Option<i64>| at.map(|t| format::ago(t as f64, store.clock.get())).unwrap_or_else(|| "never".to_string());
     let last = backup.last_success;
-    let mirrored = backup.mirror_finished;
     let message = backup.message.clone();
-    let mirror_message = backup.mirror_message.clone();
     let added = (!backup.added.is_empty()).then(|| format!("{} added", backup.added));
+    let name = backup.name.clone();
+    let remove = move |_| {
+        if !window().confirm_with_message(&format!("Remove the backup schedule {name}? It comes back with its next run.")).unwrap_or(false) {
+            return;
+        }
+        let name = name.clone();
+        spawn_local(async move {
+            match api::send("/api/v1/backups/remove", &serde_json::json!({ "name": name })).await {
+                Ok(()) => store.refresh(),
+                Err(failure) => store.notify(format!("Not removed, {failure}")),
+            }
+        });
+    };
     view! {
         <tr>
-            <td>{backup.name.clone()}</td>
-            <td><Pill severity=severity text=text/>{(!message.is_empty()).then(|| view! { <span class="sub clip" title=message.clone()>{message.clone()}</span> })}</td>
+            <td><Pill severity=severity text=text/></td>
+            <td><span class="check-name">{backup.name.clone()}</span>{(!message.is_empty()).then(|| view! { <span class="sub clip" title=message.clone()>{message.clone()}</span> })}</td>
             <td>{last.map(|t| format::hhmm(t as f64)).unwrap_or_default()}<span class="sub">{move || ago(last)}</span></td>
-            <td>{backup.size.clone()}{added.map(|text| view! { <span class="sub">{text}</span> })}</td>
-            <td>
-                <Pill severity=mirror_severity text=mirror_text/>
-                <span class="sub clip" title=backup.mirror_message.clone()>{move || if mirror_message.is_empty() { ago(mirrored) } else { mirror_message.clone() }}</span>
+            <td class="hide-sm">{backup.size.clone()}{added.map(|text| view! { <span class="sub">{text}</span> })}</td>
+            {stored.then(|| view! { <td>{destinations(store, &backup)}</td> })}
+            <td class="num">
+                <button class="btn small ghost" type="button" aria-label="Remove schedule" title="Remove schedule" on:click=remove>
+                    <span class="ico" inner_html=icons::TRASH></span>
+                </button>
             </td>
         </tr>
     }
@@ -379,18 +445,28 @@ fn backup_row(store: Store, backup: BackupSchedule) -> impl IntoView {
 pub fn BackupTable() -> impl IntoView {
     let store = use_store();
     let backups = Memo::new(move |_| store.overview.with(|o| o.as_ref().map(|o| o.backups.clone()).unwrap_or_default()));
+    let stored = Memo::new(move |_| {
+        backups.with(|list| list.iter().any(|b| !b.repository.is_empty() || !b.mirrors.is_empty() || b.mirror_state != BackupState::Unknown))
+    });
     let empty = move || backups.with(Vec::is_empty);
     view! {
         <Show
             when=move || !empty()
             fallback=|| view! { <p class="meta">"No backup data yet. Point ZeroByte's webhook at this node or set its API key."</p> }
         >
-            <div class="tbl-wrap sheet">
+            <div class="tbl-wrap sheet stack">
                 <table>
                     <thead>
-                        <tr><th>"Schedule"</th><th>"Status"</th><th>"Last success"</th><th>"Size"</th><th>"S3 mirror"</th></tr>
+                        <tr>
+                            <th>"Status"</th>
+                            <th>"Schedule"</th>
+                            <th>"Last success"</th>
+                            <th class="hide-sm">"Size"</th>
+                            {move || stored.get().then(|| view! { <th>"Stored in"</th> })}
+                            <th></th>
+                        </tr>
                     </thead>
-                    <tbody>{move || backups.get().into_iter().map(|b| backup_row(store, b)).collect_view()}</tbody>
+                    <tbody>{move || backups.get().into_iter().map(|b| backup_row(store, b, stored.get())).collect_view()}</tbody>
                 </table>
             </div>
         </Show>

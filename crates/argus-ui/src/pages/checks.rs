@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 
-use argus_model::{CheckStatus, SeriesData};
+use argus_model::{CheckStatus, SeriesData, metric_key};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::api;
 use crate::components::{Pill, all_checks, check_severity, segmented, uptime_strip};
 use crate::format;
-use crate::store::{CheckFilter, key, use_store};
+use crate::store::{CheckFilter, use_store};
 
 #[component]
 pub fn ChecksPage() -> impl IntoView {
@@ -29,7 +29,7 @@ pub fn ChecksPage() -> impl IntoView {
         period.track();
         for (host, list) in names.get() {
             for chunk in list.chunks(16) {
-                let keys = chunk.iter().map(|name| key("check", name, "ok")).collect::<Vec<_>>().join(",");
+                let keys = chunk.iter().map(|name| metric_key("check", name, "ok")).collect::<Vec<_>>().join(",");
                 let url = format!("/api/v1/series?host={}&keys={}&range=86400", api::encode(&host), api::encode(&keys));
                 let chunk = chunk.to_vec();
                 let host = host.clone();
@@ -71,17 +71,17 @@ pub fn ChecksPage() -> impl IntoView {
     view! {
         <div class="filters">
             {segmented(store.check_filter, CheckFilter::OPTIONS, "Filter checks")}
-            <a class="btn" href="#/settings/checks"><span class="ico" inner_html=crate::icons::PLUS></span>"Add check"</a>
+            <a class="btn" href="#/settings/checks"><span class="ico" inner_html=crate::icons::PLUS></span>"Add service"</a>
         </div>
         <Show when=empty>
-            <p class="meta">"No checks configured yet."</p>
+            <p class="meta">"No services yet."</p>
         </Show>
         <div class="tbl-wrap stack">
             <table>
                 <thead>
                     <tr>
                         <th>"Status"</th>
-                        <th>"Check"</th>
+                        <th>"Service"</th>
                         <th>"Type"</th>
                         <th>"Runs on"</th>
                         <th>"Last result"</th>

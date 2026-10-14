@@ -199,7 +199,7 @@ fn Sidebar() -> impl IntoView {
         };
         request_animation_frame(measure);
     });
-    let _ = window_event_listener(leptos::ev::resize, move |_| {
+    let resize = window_event_listener(leptos::ev::resize, move |_| {
         if let Some(item) = nav
             .get_untracked()
             .and_then(|nav| nav.query_selector("[aria-current=\"page\"]").ok().flatten())
@@ -208,6 +208,7 @@ fn Sidebar() -> impl IntoView {
             pill.set(Some((item.offset_top(), item.offset_height())));
         }
     });
+    on_cleanup(move || resize.remove());
     let nodes = move || {
         store
             .overview
@@ -252,12 +253,12 @@ fn Sidebar() -> impl IntoView {
                     let down = store.hosts().iter().filter(|h| h.state >= argus_model::Severity::Warning).count();
                     (down > 0).then(|| (down.to_string(), true))
                 })}
-                {nav_item("checks", "Checks", "#/checks", icons::CHECKS, move || {
+                {nav_item("checks", "Services", "#/services", icons::CHECKS, move || {
                     let failing = crate::components::all_checks(store).iter().filter(|(_, c)| c.status != argus_model::CheckStatus::Ok).count();
                     (failing > 0).then(|| (failing.to_string(), true))
                 })}
                 {nav_item("alerts", "Alerts", "#/alerts", icons::ALERTS, move || {
-                    let active = store.active_count();
+                    let active = store.alerts().len();
                     (active > 0).then(|| (active.to_string(), true))
                 })}
                 <div class="nodes">{nodes}</div>

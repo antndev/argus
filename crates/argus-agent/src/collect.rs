@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use argus_model::{Filesystem, HostInfo, Interface, Inventory, Metric, Sensor};
 
@@ -37,19 +37,12 @@ pub struct Collector {
     cpu: Option<CpuTimes>,
     net: Option<(Instant, Counters)>,
     docker: Docker,
-    http: ureq::Agent,
     warned: HashSet<String>,
 }
 
 impl Collector {
     pub fn new() -> Self {
-        Self {
-            cpu: None,
-            net: None,
-            docker: Docker::default(),
-            http: ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(2))).build().into(),
-            warned: HashSet::new(),
-        }
+        Self { cpu: None, net: None, docker: Docker::default(), warned: HashSet::new() }
     }
 
     pub fn collect(&mut self, config: &Config) -> (HostInfo, Vec<Metric>, Inventory) {
@@ -78,7 +71,13 @@ impl Collector {
             }
         }
 
-        for mount in select_mounts(platform::mounts(root), &collectors.filesystems) {
+        let pools = platform::pools();
+        for (pool, size, used) in &pools {
+            metrics.push(Metric::new("fs", pool, "used", *used as f64 * 100.0 / (*size).max(1) as f64));
+            inventory.filesystems.push(Filesystem { mount: pool.clone(), fstype: "zpool".into(), size_bytes: *size, used_bytes: *used });
+        }
+        let mounts = platform::mounts(root).into_iter().filter(|m| pools.is_empty() || m.fstype != "zfs").collect();
+        for mount in select_mounts(mounts, &collectors.filesystems) {
             let Some((size, used, available)) = fs_usage(&format!("{root}{}", mount.mount)) else {
                 continue;
             };
@@ -124,16 +123,19 @@ impl Collector {
 
         inventory.raid = platform::raid();
 
-        if let Some(url) = &collectors.docker {
-            match self.docker.collect(&self.http, url) {
-                Ok(containers) => {
-                    for container in containers.iter().filter(|c| c.state == "running") {
-                        metrics.push(Metric::new("docker", &container.name, "cpu", container.cpu));
+        if let Some(data) = &collectors.docker {
+            let data = if data.starts_with("http") { "/var/lib/docker" } else { data.as_str() };
+            match self.docker.collect(root, data) {
+                Ok(sample) => {
+                    for container in sample.containers.iter().filter(|c| c.state == "running") {
+                        if sample.measured.contains(&container.name) {
+                            metrics.push(Metric::new("docker", &container.name, "cpu", container.cpu));
+                        }
                         metrics.push(Metric::new("docker", &container.name, "memory", container.memory_bytes as f64 / 1_048_576.0));
                     }
-                    inventory.containers = containers;
+                    inventory.containers = sample.containers;
                 }
-                Err(error) => self.warn_once(format!("Docker {url}: {error}")),
+                Err(error) => self.warn_once(format!("Docker: {error}")),
             }
         }
 

@@ -285,8 +285,8 @@ impl Config {
             }
             let mut names = HashSet::new();
             for check in checks {
-                if check.name.trim().is_empty() || !names.insert(check.name.as_str()) {
-                    return Err(format!("checks on {host} need unique, non-empty names"));
+                if check.name.trim().is_empty() || check.name.contains(',') || !names.insert(check.name.as_str()) {
+                    return Err(format!("checks on {host} need unique, non-empty names without commas"));
                 }
                 if !check.kind.remote() {
                     return Err(format!("check {:?} on {host}: only http, tcp and ping checks can come from the node", check.name));

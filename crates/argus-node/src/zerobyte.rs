@@ -2,10 +2,12 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use argus_model::{BackupSchedule, BackupState};
+use argus_model::{BackupMirror, BackupSchedule, BackupState};
+use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::notify::HTTP;
@@ -96,6 +98,7 @@ pub fn readable(detail: &str) -> String {
 }
 
 pub fn apply(schedule: &mut BackupSchedule, kind: Kind, at: i64, detail: &str) {
+    schedule.removed = false;
     let detail = readable(detail);
     let latest = schedule.last_start.into_iter().chain(schedule.last_success).chain(schedule.last_failure).max().unwrap_or(i64::MIN);
     let current = at >= latest;
@@ -128,6 +131,20 @@ pub fn apply(schedule: &mut BackupSchedule, kind: Kind, at: i64, detail: &str) {
             }
         }
     }
+}
+
+pub fn remove(app: &App, name: &str) {
+    update(app, name, |schedule| *schedule = BackupSchedule { name: schedule.name.clone(), removed: true, ..Default::default() });
+}
+
+#[derive(Deserialize)]
+pub struct Removal {
+    name: String,
+}
+
+pub async fn removal(State(app): State<Arc<App>>, Json(removal): Json<Removal>) -> StatusCode {
+    remove(&app, &removal.name);
+    StatusCode::NO_CONTENT
 }
 
 fn update(app: &App, name: &str, change: impl FnOnce(&mut BackupSchedule)) {
@@ -196,6 +213,7 @@ fn fetch(base: &str, key: &str, path: &str) -> Result<Value, String> {
 }
 
 pub fn apply_api(schedule: &mut BackupSchedule, item: &Value, mirrors: &[Value]) {
+    schedule.removed = false;
     if let Some(at) = item.get("lastBackupAt").and_then(millis) {
         let kind = match item.get("lastBackupStatus").and_then(Value::as_str) {
             Some("success") => Some(Kind::Success),
@@ -209,6 +227,28 @@ pub fn apply_api(schedule: &mut BackupSchedule, item: &Value, mirrors: &[Value])
             apply(schedule, kind, at, detail);
         }
     }
+    let repository = |value: &Value, field: &str| value.get("repository").and_then(|r| r.get(field)).and_then(Value::as_str).unwrap_or_default().to_string();
+    schedule.repository = repository(item, "name");
+    schedule.repository_kind = repository(item, "type");
+    schedule.mirrors = mirrors
+        .iter()
+        .filter(|m| m.get("enabled").and_then(Value::as_bool).unwrap_or(true))
+        .map(|m| {
+            let task = m.get("lastSyncTask").filter(|t| !t.is_null());
+            let status = task.and_then(|t| t.get("status")).and_then(Value::as_str);
+            BackupMirror {
+                repository: repository(m, "name"),
+                kind: repository(m, "type"),
+                state: match status {
+                    None => BackupState::Unknown,
+                    Some("succeeded") => BackupState::Ok,
+                    Some(_) => BackupState::Failed,
+                },
+                finished: task.and_then(|t| t.get("finishedAt")).and_then(millis),
+                message: task.and_then(|t| t.get("error")).and_then(Value::as_str).map(readable).unwrap_or_default(),
+            }
+        })
+        .collect();
     let tasks: Vec<&Value> = mirrors
         .iter()
         .filter(|m| m.get("enabled").and_then(Value::as_bool).unwrap_or(true))
@@ -248,12 +288,18 @@ pub fn poll(app: &App) {
         match fetch(&base, &key, "/api/v1/backups") {
             Ok(value) => {
                 failing = false;
+                let mut listed = Vec::new();
                 for item in list(value) {
                     let (Some(name), Some(id)) = (item.get("name").and_then(Value::as_str), item.get("shortId").and_then(Value::as_str)) else {
                         continue;
                     };
+                    listed.push(name.to_string());
                     let mirrors = fetch(&base, &key, &format!("/api/v1/backups/{id}/mirrors")).map(list).unwrap_or_default();
                     update(app, name, |schedule| apply_api(schedule, &item, &mirrors));
+                }
+                let gone: Vec<String> = db::backups(&app.db()).into_iter().filter(|b| !b.removed && !listed.contains(&b.name)).map(|b| b.name).collect();
+                for name in gone {
+                    remove(app, &name);
                 }
             }
             Err(error) => {
@@ -279,6 +325,14 @@ mod tests {
         assert_eq!(readable("disk full"), "disk full");
         let two = format!("{raw} {}", r#"{"message_type":"error","error":{"message":"second"}}"#);
         assert!(readable(&two).ends_with("and 1 more"));
+    }
+
+    #[test]
+    fn removed_schedules_come_back_with_new_events() {
+        let mut schedule = BackupSchedule { name: "Media".into(), removed: true, ..Default::default() };
+        apply(&mut schedule, Kind::Success, 1_000, "");
+        assert!(!schedule.removed);
+        assert_eq!(schedule.last_success, Some(1_000));
     }
 
     #[test]
@@ -324,15 +378,18 @@ mod tests {
     #[test]
     fn api_items_set_backup_and_mirror_state() {
         let mut schedule = BackupSchedule::default();
-        let item = json!({ "name": "nas", "shortId": "a1", "lastBackupAt": 1_700_000_000_000i64, "lastBackupStatus": "success" });
+        let item = json!({ "name": "nas", "shortId": "a1", "lastBackupAt": 1_700_000_000_000i64, "lastBackupStatus": "success", "repository": { "name": "local-raid", "type": "local" } });
         let mirrors = vec![
-            json!({ "enabled": true, "lastSyncTask": { "status": "succeeded", "error": null, "finishedAt": 1_700_000_100_000i64 } }),
+            json!({ "enabled": true, "repository": { "name": "hetzner", "type": "s3" }, "lastSyncTask": { "status": "succeeded", "error": null, "finishedAt": 1_700_000_100_000i64 } }),
             json!({ "enabled": false, "lastSyncTask": { "status": "failed", "error": "x", "finishedAt": 1 } }),
         ];
         apply_api(&mut schedule, &item, &mirrors);
         assert_eq!(schedule.state, BackupState::Ok);
         assert_eq!(schedule.mirror_state, BackupState::Ok);
         assert_eq!(schedule.mirror_finished, Some(1_700_000_100_000));
+        assert_eq!((schedule.repository.as_str(), schedule.repository_kind.as_str()), ("local-raid", "local"));
+        assert_eq!(schedule.mirrors.len(), 1);
+        assert_eq!((schedule.mirrors[0].repository.as_str(), schedule.mirrors[0].kind.as_str(), schedule.mirrors[0].state), ("hetzner", "s3", BackupState::Ok));
         let failing = vec![json!({ "lastSyncTask": { "status": "failed", "error": "403 from S3", "finishedAt": 1_700_000_200 } })];
         apply_api(&mut schedule, &item, &failing);
         assert_eq!(schedule.mirror_state, BackupState::Failed);

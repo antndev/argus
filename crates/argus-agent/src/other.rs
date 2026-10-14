@@ -44,6 +44,10 @@ pub fn smart(_device: &str) -> Result<Smart, String> {
     Err("SMART is only supported on Linux and FreeBSD".into())
 }
 
+pub fn pools() -> Vec<(String, u64, u64)> {
+    Vec::new()
+}
+
 pub fn failed_units(_root: &str) -> Result<Vec<String>, String> {
     Err("systemd is only supported on Linux".into())
 }

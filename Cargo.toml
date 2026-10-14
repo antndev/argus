@@ -4,7 +4,7 @@ members = ["crates/argus-model", "crates/argus-agent", "crates/argus-node", "cra
 default-members = ["crates/argus-model", "crates/argus-agent", "crates/argus-node"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license-file = "LICENSE"
 repository = "https://github.com/antndev/argus"

@@ -108,6 +108,20 @@ fn failed(state: &mut (i64, u32), now: i64) {
     state.1 += 1;
 }
 
+fn attempt(app: &App, now: i64) -> bool {
+    let mut state = app.logins();
+    if throttled(&state, now) {
+        return false;
+    }
+    failed(&mut state, now);
+    true
+}
+
+fn forgive(app: &App) {
+    let mut state = app.logins();
+    state.1 = state.1.saturating_sub(1);
+}
+
 fn too_many() -> Response {
     (StatusCode::TOO_MANY_REQUESTS, "too many wrong passwords, wait a few minutes").into_response()
 }
@@ -223,19 +237,23 @@ pub async fn change(State(app): State<Arc<App>>, headers: HeaderMap, Json(form):
         return (StatusCode::FORBIDDEN, "change the password on the internal node").into_response();
     }
     let Some(current) = stored(&app) else { return StatusCode::UNAUTHORIZED.into_response() };
-    if throttled(&app.logins(), now_ms()) {
+    if !attempt(&app, now_ms()) {
         return too_many();
     }
     if !verify(&app, &current, &form.current).await {
-        failed(&mut app.logins(), now_ms());
         tokio::time::sleep(Duration::from_secs(1)).await;
         return (StatusCode::FORBIDDEN, "the current password is wrong").into_response();
     }
+    forgive(&app);
     if let Some(rejected) = weak(&form.password) {
         return rejected;
     }
     let Some(hashed) = hash(&app, form.password).await else { return StatusCode::INTERNAL_SERVER_ERROR.into_response() };
-    if db::set_secret(&app.db(), PASSWORD, &hashed).and_then(|_| rotate(&app.db(), now_ms())).is_err() {
+    let saved = {
+        let db = app.db();
+        db::set_secret(&db, PASSWORD, &hashed).and_then(|_| rotate(&db, now_ms()))
+    };
+    if saved.is_err() {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
     log("dashboard password changed, all sessions ended");
@@ -244,14 +262,14 @@ pub async fn change(State(app): State<Arc<App>>, headers: HeaderMap, Json(form):
 
 pub async fn login(State(app): State<Arc<App>>, headers: HeaderMap, Json(login): Json<Login>) -> Response {
     let Some(stored) = stored(&app) else { return (StatusCode::CONFLICT, "set a password first").into_response() };
-    if throttled(&app.logins(), now_ms()) {
+    if !attempt(&app, now_ms()) {
         return too_many();
     }
     if !verify(&app, &stored, &login.password).await {
-        failed(&mut app.logins(), now_ms());
         tokio::time::sleep(Duration::from_secs(1)).await;
         return (StatusCode::UNAUTHORIZED, "wrong password").into_response();
     }
+    forgive(&app);
     start_session(&app, &headers)
 }
 
@@ -282,7 +300,7 @@ mod tests {
         assert!(!valid(&app, &with_cookie(&format!("argus_session={token}"))));
         db::create_secret(&app.db(), PASSWORD, "hash").expect("store");
         assert!(valid(&app, &with_cookie(&format!("theme=dark; argus_session={token}"))));
-        let forged = format!("{}0", &token[..token.len() - 1]);
+        let forged = format!("{}{}", &token[..token.len() - 1], if token.ends_with('0') { '1' } else { '0' });
         assert!(!valid(&app, &with_cookie(&format!("argus_session={forged}"))));
         let old = issue(&app.db(), now_ms() - LIFETIME - 1);
         assert!(!valid(&app, &with_cookie(&format!("argus_session={old}"))));
@@ -305,6 +323,30 @@ mod tests {
         adopt(&external.db(), &export(&internal.db())).expect("adopt");
         assert!(!check(&external.db(), &token, now_ms()));
         assert!(db::secret(&external.db(), PASSWORD).is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn changing_the_password_ends_old_sessions_without_hanging() {
+        let app = Arc::new(app());
+        let first = hash(&app, "first-password".into()).await.expect("hash");
+        db::create_secret(&app.db(), PASSWORD, &first).expect("store");
+        let token = issue(&app.db(), now_ms());
+        let form = Change { current: "first-password".into(), password: "second-password".into() };
+        let call = tokio::spawn(change(State(app.clone()), HeaderMap::new(), Json(form)));
+        let response = tokio::time::timeout(Duration::from_secs(60), call).await.expect("change returns").expect("task");
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert!(!check(&app.db(), &token, now_ms()));
+    }
+
+    #[test]
+    fn every_attempt_counts_before_the_check() {
+        let app = app();
+        for _ in 0..MAX_FAILURES {
+            assert!(attempt(&app, 1_000));
+        }
+        assert!(!attempt(&app, 1_000));
+        forgive(&app);
+        assert!(attempt(&app, 1_000));
     }
 
     #[test]

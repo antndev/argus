@@ -166,16 +166,12 @@ pub fn sensors(mut hwmons: Vec<Hwmon>) -> Vec<(Sensor, f64)> {
 }
 
 pub fn smart_log(device: &str, log: &[u8; 512]) -> Smart {
-    let counter = |start: usize| u64::try_from(u128::from_le_bytes(log[start..start + 16].try_into().unwrap_or_default())).unwrap_or(u64::MAX);
     let kelvin = u16::from_le_bytes([log[1], log[2]]);
     Smart {
         device: device.to_string(),
-        model: String::new(),
         passed: log[0] == 0,
         percent_used: Some(f64::from(log[5])),
         temperature: (kelvin > 0).then(|| f64::from(kelvin) - 273.15),
-        media_errors: Some(counter(160)),
-        power_on_hours: Some(counter(128)),
     }
 }
 
@@ -314,8 +310,6 @@ unused devices: <none>
         assert!(smart.passed);
         assert_eq!(smart.percent_used, Some(4.0));
         assert!((smart.temperature.unwrap_or_default() - 44.85).abs() < 0.001);
-        assert_eq!(smart.power_on_hours, Some(12_345));
-        assert_eq!(smart.media_errors, Some(2));
         log[0] = 0x04;
         assert!(!smart_log("nvme0", &log).passed);
     }

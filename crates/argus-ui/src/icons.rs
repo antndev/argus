@@ -6,8 +6,6 @@ pub const WARNING: &str = r#"<svg viewBox="0 0 16 16" aria-hidden="true"><path d
 
 pub const CRITICAL: &str = r#"<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.4 1.8h5.2l3.6 3.6v5.2l-3.6 3.6H5.4l-3.6-3.6V5.4z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M6 6l4 4M10 6l-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>"#;
 
-pub const MUTED: &str = r#"<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.4 11.2V7.4a3.6 3.6 0 0 1 5.9-2.8M11.6 7.3v3.9H3.4M6.6 13.6h2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.6 2.6l10.8 10.8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>"#;
-
 pub const LOGO: &str = r#"<svg viewBox="0 0 24 24" aria-hidden="true"><path class="lid" d="M2 12c2.8-4.7 6.1-7 10-7s7.2 2.3 10 7c-2.8 4.7-6.1 7-10 7s-7.2-2.3-10-7z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><g class="iris"><circle cx="12" cy="12" r="3.6" fill="currentColor"/><circle cx="13.2" cy="10.8" r="1" fill="var(--bg-side)"/></g></svg>"#;
 
 macro_rules! line_icon {
@@ -45,7 +43,7 @@ line_icon!(REFRESH, r#"<path d="M13.25 8A5.25 5.25 0 1 1 11.7 4.3M13.25 2.5v3h-3
 pub fn severity(severity: Severity) -> &'static str {
     match severity {
         Severity::Ok => OK,
-        Severity::Muted => MUTED,
+        Severity::Muted => WAITING,
         Severity::Warning => WARNING,
         Severity::Critical => CRITICAL,
     }

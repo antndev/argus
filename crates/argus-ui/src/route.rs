@@ -22,7 +22,7 @@ impl Route {
         match (parts.next(), parts.next()) {
             (Some("hosts"), Some(id)) if !id.is_empty() => Self::Host(decode(id)),
             (Some("hosts"), None) => Self::Hosts,
-            (Some("checks"), None) => Self::Checks,
+            (Some("services" | "checks"), None) => Self::Checks,
             (Some("alerts"), None) => Self::Alerts,
             (Some("settings"), page) => Self::Settings(page.map(decode).unwrap_or_default()),
             _ => Self::Overview,
@@ -34,15 +34,11 @@ impl Route {
             Self::Overview => "#/".to_string(),
             Self::Hosts => "#/hosts".to_string(),
             Self::Host(id) => format!("#/hosts/{}", js_sys::encode_uri_component(id)),
-            Self::Checks => "#/checks".to_string(),
+            Self::Checks => "#/services".to_string(),
             Self::Alerts => "#/alerts".to_string(),
             Self::Settings(page) if page.is_empty() => "#/settings".to_string(),
             Self::Settings(page) => format!("#/settings/{}", js_sys::encode_uri_component(page)),
         }
-    }
-
-    pub fn go(&self) {
-        let _ = window().location().set_hash(self.href().trim_start_matches('#'));
     }
 
     pub fn section(&self) -> &'static str {

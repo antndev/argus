@@ -1,5 +1,5 @@
 name: Argus agent
-version: "0.1.0"
+version: "0.2.0"
 slug: argus_agent
 description: Reports Home Assistant host metrics to Argus nodes
 url: https://github.com/antndev/argus
@@ -15,7 +15,7 @@ environment:
   ARGUS_AGENT_CONFIG: /data/options.json
 options:
   id: homeassistant
-  site: home
+  site: internal
   role: Home Assistant
   os: Home Assistant OS
   agent: addon

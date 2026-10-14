@@ -20,8 +20,13 @@ changes anything on them.
   can only report data for that one host.
 - Reports travel over HTTPS through a reverse proxy in front of the node. The agent warns when a node URL is not HTTPS.
 - The container image is a single static binary on `scratch`. Run it with `read_only: true`, `cap_drop: [ALL]` and
-  `no-new-privileges`, mount the host root read-only and give Docker access only through a read-only socket proxy that
-  allows container listing.
+  `no-new-privileges` and mount the host root read-only. Docker containers are read from Docker's data directory and
+  the cgroups through that mount, the agent never gets the Docker socket.
+- The node image carries the agent too. Started as root, the node launches the agent as its own process and then
+  switches itself to user 65534 before it opens a port, so only the agent, which listens on nothing, keeps root.
+- A failing JSON assertion reports which field did not match, never the value it found, and agents accept at most 64
+  http, tcp and ping checks from a node. The internal node never takes central checks from the external node, so a
+  compromised external node cannot point the home agents at local services.
 - NVMe SMART health needs the device and `CAP_SYS_ADMIN`. Leave `smart` empty if that is not acceptable, temperatures
   still come from hwmon without it.
 - On FreeBSD the agent runs as root so it can read the NVMe log page. It still listens on nothing.

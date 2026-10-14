@@ -87,7 +87,7 @@ fn run(config: &Config) -> ! {
     for Target { url, .. } in nodes.iter().filter(|node| clear_text(&node.url)) {
         log(&format!("warning: {url} is not HTTPS, the token is sent in clear text"));
     }
-    let http: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(10))).build().into();
+    let http: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(10))).http_status_as_error(false).build().into();
     let mut collector = Collector::new();
     let mut checks = config.checks.clone();
     log(&format!("argus-agent {} reporting to {} node(s) every {} s", env!("CARGO_PKG_VERSION"), nodes.len(), config.interval.as_secs()));
@@ -115,10 +115,12 @@ struct Target {
     checks: bool,
 }
 
+const MAX_REMOTE_CHECKS: usize = 64;
+
 fn merge_checks(config: &Config, remote: Vec<Check>) -> Vec<Check> {
     let ceiling = config.interval.saturating_sub(Duration::from_secs(1)).max(Duration::from_secs(1));
     let mut checks = config.checks.clone();
-    for mut check in remote {
+    for mut check in remote.into_iter().take(MAX_REMOTE_CHECKS) {
         if !check.kind.remote() || checks.iter().any(|c| c.name == check.name) {
             continue;
         }
@@ -164,26 +166,34 @@ fn send(http: &ureq::Agent, nodes: &[Target], body: &[u8]) -> Option<Vec<Check>>
                         .header("Content-Encoding", "gzip")
                         .header("Authorization", format!("Bearer {}", node.token))
                         .send(body);
-                    match sent {
-                        Ok(mut response) if node.checks && response.status() == 200 => response
-                            .body_mut()
-                            .with_config()
-                            .limit(1024 * 1024)
-                            .read_to_vec()
-                            .ok()
-                            .and_then(|raw| serde_json::from_slice::<IngestReply>(&raw).ok())
-                            .map(|reply| reply.checks),
-                        Ok(_) => None,
-                        Err(error) => {
-                            log(&format!("{}: {error}", node.url));
-                            None
+                    let reply = match sent {
+                        Ok(mut response) => {
+                            let status = response.status().as_u16();
+                            let body = response.body_mut().with_config().limit(1024 * 1024).read_to_vec().unwrap_or_default();
+                            node_checks(node.checks, status, &body)
                         }
-                    }
+                        Err(error) => Err(error.to_string()),
+                    };
+                    reply.unwrap_or_else(|error| {
+                        log(&format!("{}: {error}", node.url));
+                        None
+                    })
                 })
             })
             .collect();
         replies.into_iter().find_map(|reply| reply.join().ok().flatten())
     })
+}
+
+fn node_checks(accept: bool, status: u16, body: &[u8]) -> Result<Option<Vec<Check>>, String> {
+    if status != 200 {
+        let text = String::from_utf8_lossy(&body[..body.len().min(200)]).trim().to_string();
+        return Err(if text.is_empty() { format!("status {status}") } else { format!("status {status}, {text}") });
+    }
+    if !accept {
+        return Ok(None);
+    }
+    serde_json::from_slice::<IngestReply>(body).map(|reply| Some(reply.checks)).map_err(|error| format!("unreadable reply, {error}"))
 }
 
 pub fn log(message: &str) {
@@ -243,6 +253,15 @@ mod tests {
         let merged = merge_checks(&config, remote);
         assert_eq!(merged.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["Web", "Slow"]);
         assert_eq!(merged[1].kind.timeout(), Some(Duration::from_secs(29)));
+    }
+
+    #[test]
+    fn node_checks_follow_the_checks_switch_and_surface_problems() {
+        let reply = br#"{"checks":[{"name":"Web","type":"ping","host":"a"}]}"#;
+        assert_eq!(node_checks(true, 200, reply).expect("ok").map(|c| c.len()), Some(1));
+        assert_eq!(node_checks(false, 200, reply).expect("ok"), None);
+        assert!(node_checks(true, 200, b"{\"checks\":[{\"name\":\"X\",\"type\":\"teleport\"}]}").is_err());
+        assert_eq!(node_checks(true, 422, b"unknown site").expect_err("fails"), "status 422, unknown site");
     }
 
     #[test]

@@ -80,6 +80,9 @@ impl Config {
         if let Some(check) = config.checks.iter().find(|c| matches!(&c.kind, CheckKind::Exec { command, .. } if command.is_empty())) {
             return Err(format!("check {:?} has an empty command", check.name));
         }
+        if let Some(check) = config.checks.iter().find(|c| c.name.contains(',')) {
+            return Err(format!("check {:?} has a comma in its name", check.name));
+        }
         for check in &config.checks {
             let Some(timeout) = check.kind.timeout() else {
                 continue;

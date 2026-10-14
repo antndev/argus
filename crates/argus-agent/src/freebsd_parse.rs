@@ -20,8 +20,6 @@ pub fn nvmecontrol_health(device: &str, text: &str) -> Smart {
                 smart.temperature = value.split(',').find_map(|part| part.trim().strip_suffix(" C")?.trim().parse().ok());
             }
             "Percentage used" => smart.percent_used = value.parse().ok(),
-            "Power on hours" => smart.power_on_hours = value.parse().ok(),
-            "Media errors" => smart.media_errors = value.parse().ok(),
             _ => {}
         }
     }
@@ -67,9 +65,23 @@ fn element(body: &str, name: &str) -> Option<String> {
     Some(body[start..start + end].trim().to_string())
 }
 
+pub fn zpool_list(text: &str) -> Vec<(String, u64, u64)> {
+    text.lines()
+        .filter_map(|line| {
+            let mut fields = line.split('\t');
+            Some((fields.next()?.to_string(), fields.next()?.parse().ok()?, fields.next()?.parse().ok()?))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zpool_list_reads_size_and_allocation() {
+        assert_eq!(zpool_list("zroot\t214748364800\t182536110080\nbad line\n"), vec![("zroot".to_string(), 214_748_364_800, 182_536_110_080)]);
+    }
 
     #[test]
     fn cpu_temperature_int_and_string() {
@@ -103,8 +115,6 @@ Temperature Sensor 1:           320 K, 46.85 C, 116.33 F
         assert!(smart.passed);
         assert_eq!(smart.temperature, Some(44.85));
         assert_eq!(smart.percent_used, Some(3.0));
-        assert_eq!(smart.power_on_hours, Some(8760));
-        assert_eq!(smart.media_errors, Some(0));
         assert!(!nvmecontrol_health("nvme0", "Critical Warning State:         0x04\n").passed);
     }
 

@@ -93,11 +93,14 @@ fn payload(message: &Message, push: &Push) -> Vec<u8> {
 }
 
 fn forget(app: &App, device: &Device) {
-    let mut next = (*app.config()).clone();
-    if let Some(push) = next.shared.push.as_mut() {
-        push.devices.retain(|d| d.endpoint != device.endpoint);
-    }
-    if let Err(error) = app.apply_config(next, true) {
+    let removed = app.edit_config(true, |current| {
+        let mut next = current.clone();
+        if let Some(push) = next.shared.push.as_mut() {
+            push.devices.retain(|d| d.endpoint != device.endpoint);
+        }
+        Ok(next)
+    });
+    if let Err(error) = removed {
         log(&format!("removing the expired device {} failed: {error}", device.name));
         return;
     }
@@ -135,7 +138,21 @@ pub fn worker(app: &App, queue: &Receiver<Message>) {
     for message in queue {
         if let Some(push) = app.config().shared.push.clone() {
             let body = payload(&message, &push);
-            let results: Vec<bool> = push.devices.iter().map(|device| send(app, &push, device, &body, &message)).collect();
+            let results: Vec<bool> = push
+                .devices
+                .iter()
+                .map(|device| {
+                    let mark = format!("{}|{}", message.id, crate::util::sha256_hex(device.endpoint.as_bytes()));
+                    if db::delivered(&app.db(), &mark) {
+                        return true;
+                    }
+                    let ok = send(app, &push, device, &body, &message);
+                    if ok {
+                        let _ = db::mark_delivery(&app.db(), &mark, now_ms());
+                    }
+                    ok
+                })
+                .collect();
             let done = results.into_iter().all(|ok| ok);
             if done {
                 let _ = db::mark_sent(&app.db(), &message.id, now_ms());
@@ -187,11 +204,9 @@ pub struct Subscription {
     auth: String,
 }
 
+const NO_PUSH: &str = "turn on phone notifications first";
+
 pub async fn subscribe(State(app): State<Arc<App>>, Json(subscription): Json<Subscription>) -> Response {
-    let mut next = (*app.config()).clone();
-    let Some(push) = next.shared.push.as_mut() else {
-        return (StatusCode::CONFLICT, "turn on phone notifications and save first").into_response();
-    };
     let device = Device {
         name: subscription.name.trim().chars().take(40).collect(),
         endpoint: subscription.endpoint,
@@ -199,14 +214,22 @@ pub async fn subscribe(State(app): State<Arc<App>>, Json(subscription): Json<Sub
         auth: subscription.auth,
         added: now_ms(),
     };
-    push.devices.retain(|d| d.endpoint != device.endpoint && d.name != device.name);
-    push.devices.push(device);
     let worker = app.clone();
-    match tokio::task::spawn_blocking(move || worker.apply_config(next, true)).await {
+    let edit = move || {
+        worker.edit_config(true, |current| {
+            let mut next = current.clone();
+            let push = next.shared.push.as_mut().ok_or_else(|| NO_PUSH.to_string())?;
+            push.devices.retain(|d| d.endpoint != device.endpoint && d.name != device.name);
+            push.devices.push(device);
+            Ok(next)
+        })
+    };
+    match tokio::task::spawn_blocking(edit).await {
         Ok(Ok(_)) => {
             app.wake_sync();
             StatusCode::NO_CONTENT.into_response()
         }
+        Ok(Err(error)) if error == NO_PUSH => (StatusCode::CONFLICT, error).into_response(),
         Ok(Err(error)) => (StatusCode::BAD_REQUEST, error).into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }

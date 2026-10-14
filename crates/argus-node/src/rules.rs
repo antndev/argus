@@ -142,7 +142,7 @@ fn inventory_conditions(app: &App, snapshot: &HostSnapshot, active: &HashMap<Str
 fn backup_conditions(app: &App, now: i64, schedules: Vec<BackupSchedule>) -> Vec<Condition> {
     let max_age = app.config().shared.backup_max_age.0;
     let mut conditions = Vec::new();
-    for backup in schedules {
+    for backup in schedules.into_iter().filter(|b| !b.removed) {
         let name = &backup.name;
         match backup.state {
             BackupState::Failed => conditions.push(Condition::new(
@@ -203,6 +203,9 @@ fn backup_conditions(app: &App, now: i64, schedules: Vec<BackupSchedule>) -> Vec
 
 pub fn evaluate(app: &App, now: i64) {
     let peer_down = app.peer_down(now);
+    if app.config().peer.is_some() && app.peer_state().last_sync.is_none() && !peer_down {
+        return;
+    }
     let snapshots = app.snapshots();
     let (active, schedules) = {
         let db = app.db();
@@ -236,10 +239,12 @@ pub fn evaluate(app: &App, now: i64) {
                 format!("No report for {}", duration_text(now - snapshot.last_seen)),
             );
             keys_in_scope.insert(condition.key.clone());
+            keys_in_scope.extend(active.values().filter(|a| a.host == host.id && a.state == AlertState::Pending).map(|a| a.key.clone()));
             conditions.push(condition);
         }
     }
     let config = app.config();
+    keys_in_scope.extend(active.values().filter(|a| a.rule == "node" && a.owner == config.name).map(|a| a.key.clone()));
     if let Some(peer) = &config.peer {
         let key = format!("{}|node|", peer.name);
         keys_in_scope.insert(key);
@@ -295,6 +300,10 @@ fn reconcile(app: &App, now: i64, conditions: Vec<Condition>, hosts: &HashSet<St
                 since: now,
                 ..Default::default()
             });
+            if alert.state == AlertState::Firing && condition.severity > alert.severity {
+                alert.notified_fire = false;
+                transitions.push((Alert { severity: condition.severity, title: condition.title.clone(), ..alert.clone() }, true));
+            }
             alert.severity = condition.severity;
             alert.title = condition.title;
             alert.detail = condition.detail;
@@ -397,7 +406,7 @@ pub fn describe(app: &App) -> Vec<RuleInfo> {
         .collect();
     let fixed = [
         ("Host unreachable", "All hosts", "No report for 90 s", Severity::Critical),
-        ("Checks", "Every check", "3 failed runs in a row", Severity::Critical),
+        ("Services", "Every service", "3 failed runs in a row", Severity::Critical),
         ("RAID", "mdraid arrays", "Degraded or inactive", Severity::Critical),
         ("SMART", "NVMe drives", "Critical warning set", Severity::Critical),
         ("Systemd", "Linux hosts", "Failed units", Severity::Warning),
@@ -515,6 +524,8 @@ mod tests {
         app.store_report(degraded, 3 * MINUTE);
         evaluate(&app, 3 * MINUTE);
         assert_eq!(alerts(&app)["h|check|Web"].severity, Severity::Critical);
+        let fired: Vec<String> = db::events(&app.db(), 10).into_iter().filter(|e| e.kind == "fired").map(|e| e.text).collect();
+        assert_eq!(fired, ["Web failing", "Web degraded"]);
     }
 
     #[test]

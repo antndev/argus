@@ -1,7 +1,7 @@
 use argus_model::Severity;
 use leptos::prelude::*;
 
-use crate::components::class;
+use crate::components::{class, drag_over, drag_start, drop_on, move_keys};
 use crate::format;
 use crate::icons;
 use crate::pages::HostPage;
@@ -22,7 +22,7 @@ pub fn HostsPage() -> impl IntoView {
             && selected.get().is_none()
             && let Some(first) = store.host_ids().into_iter().next()
         {
-            Route::Host(first).go();
+            let _ = window().location().replace(&Route::Host(first).href());
         }
     });
     let ids = Memo::new(move |_| {
@@ -55,11 +55,26 @@ pub fn HostsPage() -> impl IntoView {
                     .unwrap_or_default()
             })
         };
-        let target = id.clone();
+        let (target, dragged) = (id.clone(), id.clone());
         let current = move || (selected.get().as_deref() == Some(target.as_str())).then_some("page");
+        let over = RwSignal::new(false);
         view! {
             <li>
-                <a class="list-item" href=Route::Host(id.clone()).href() aria-current=current>
+                <a
+                    class="list-item"
+                    class:drop=move || over.get()
+                    class:dragging=move || store.dragging.with(|d| d.as_deref() == Some(dragged.as_str()))
+                    href=Route::Host(id.clone()).href()
+                    aria-current=current
+                    draggable="true"
+                    aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
+                    on:dragstart=drag_start(store, id.clone())
+                    on:dragend=move |_| store.dragging.set(None)
+                    on:dragover=drag_over(store, over)
+                    on:dragleave=move |_| over.set(false)
+                    on:drop=drop_on(store, id.clone(), over)
+                    on:keydown=move_keys(store, id.clone())
+                >
                     <span class=move || format!("tile {}", class(state()))>
                         <span class="ico" inner_html=icons::HOSTS></span>
                     </span>

@@ -7,7 +7,7 @@ on.
 ## Options
 
 - `id`: the host name shown in Argus, it must match the entry in the node's `[agents]` section.
-- `site`: the node that owns this host, for example `home`.
+- `site`: the node that owns this host, for example `internal`.
 - `interval`: seconds between reports.
 - `nodes`: one entry per node with its URL and this host's token. Add the host on the node under Settings, Hosts
   and agents, which shows the token once. Optional `checks: false` ignores the http, tcp and ping checks that node

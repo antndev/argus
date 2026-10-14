@@ -54,11 +54,6 @@ pub fn metric_key(group: &str, item: &str, field: &str) -> String {
     format!("{group}{KEY_SEPARATOR}{item}{KEY_SEPARATOR}{field}")
 }
 
-pub fn split_key(key: &str) -> Option<(&str, &str, &str)> {
-    let mut parts = key.splitn(3, KEY_SEPARATOR);
-    Some((parts.next()?, parts.next()?, parts.next()?))
-}
-
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Inventory {
@@ -102,6 +97,7 @@ pub struct Container {
     pub image: String,
     pub state: String,
     pub status: String,
+    pub health: String,
     pub restarts: u32,
     pub cpu: f64,
     pub memory_bytes: u64,
@@ -121,12 +117,9 @@ pub struct Raid {
 #[serde(default)]
 pub struct Smart {
     pub device: String,
-    pub model: String,
     pub passed: bool,
     pub percent_used: Option<f64>,
     pub temperature: Option<f64>,
-    pub media_errors: Option<u64>,
-    pub power_on_hours: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -186,7 +179,6 @@ pub struct Alert {
     pub resolved_at: Option<i64>,
     pub notified_fire: bool,
     pub notified_resolve: bool,
-    pub suppressed: bool,
     pub owner: String,
     pub updated: i64,
 }
@@ -280,14 +272,27 @@ pub struct BackupSchedule {
     pub mirror_message: String,
     pub size: String,
     pub added: String,
+    pub repository: String,
+    pub repository_kind: String,
+    pub mirrors: Vec<BackupMirror>,
+    pub removed: bool,
     pub updated: i64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BackupMirror {
+    pub repository: String,
+    pub kind: String,
+    pub state: BackupState,
+    pub finished: Option<i64>,
+    pub message: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct NodeStatus {
     pub name: String,
-    pub site: String,
     pub this: bool,
     pub internal: bool,
     pub reachable: bool,
@@ -351,7 +356,7 @@ pub struct Check {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CheckKind {
     Http {
         url: String,
@@ -467,10 +472,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn keys_round_trip_with_paths_and_spaces() {
-        let metric = Metric::new("fs", "/mnt/data", "used", 1.0);
-        assert_eq!(split_key(&metric.key()), Some(("fs", "/mnt/data", "used")));
-        assert_eq!(split_key(&metric_key("temp", "CPU package", "value")), Some(("temp", "CPU package", "value")));
+    fn checks_reject_unknown_fields() {
+        assert!(serde_json::from_str::<Check>(r#"{"name":"Web","type":"http","url":"https://a","contains":"ok"}"#).is_ok());
+        assert!(serde_json::from_str::<Check>(r#"{"name":"Web","type":"http","url":"https://a","contain":"ok"}"#).is_err());
     }
 
     #[test]

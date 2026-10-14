@@ -17,7 +17,7 @@ const HIDDEN: &str = "********";
 const PAGES: [(&str, &str); 12] = [
     ("general", "General"),
     ("agents", "Hosts and agents"),
-    ("checks", "Checks"),
+    ("checks", "Services"),
     ("rules", "Alert rules"),
     ("notifications", "Notifications"),
     ("peer", "External node"),
@@ -54,12 +54,18 @@ fn set(root: &mut Value, path: &str, value: Option<Value>) {
         return;
     };
     let mut node = root;
-    for part in parents {
+    for (index, part) in parents.iter().enumerate() {
+        let next = parents.get(index + 1).unwrap_or(last);
+        let fresh = || if next.parse::<usize>().is_ok() { json!([]) } else { json!({}) };
         node = match node {
-            Value::Object(map) => map.entry(part.clone()).or_insert_with(|| json!({})),
-            Value::Array(list) => match part.parse::<usize>().ok().and_then(|i| list.get_mut(i)) {
-                Some(next) => next,
-                None => return,
+            Value::Object(map) => map.entry(part.clone()).or_insert_with(fresh),
+            Value::Array(list) => match part.parse::<usize>() {
+                Ok(at) if at < list.len() => &mut list[at],
+                Ok(at) if at == list.len() => {
+                    list.push(fresh());
+                    &mut list[at]
+                }
+                _ => return,
             },
             _ => return,
         };
@@ -369,6 +375,9 @@ fn switch(store: Store, path: &'static str, template: fn() -> Value) -> impl Int
             role="switch"
             aria-checked=move || on().to_string()
             on:click=move |_| {
+                if on() && !window().confirm_with_message("Turn this off? Its stored keys and tokens are deleted.").unwrap_or(false) {
+                    return;
+                }
                 let next = if on() { None } else { Some(saved(store, path).unwrap_or_else(template)) };
                 write(store, path, next);
             }
@@ -396,7 +405,12 @@ fn general(store: Store) -> impl IntoView {
 fn agents(store: Store) -> impl IntoView {
     let fresh = RwSignal::new(None::<(String, String)>);
     let new_id = RwSignal::new(String::new());
-    let ids = Memo::new(move |_| keys(store, "/shared/agents"));
+    let ids = Memo::new(move |_| {
+        let order: Vec<String> = read(store, "/shared/order").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+        let mut ids = keys(store, "/shared/agents");
+        ids.sort_by_key(|id| order.iter().position(|o| o == id).unwrap_or(usize::MAX));
+        ids
+    });
     let add = move |_| {
         let id = new_id.get_untracked().trim().to_string();
         if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)) {
@@ -420,7 +434,7 @@ fn agents(store: Store) -> impl IntoView {
                 <span class="tile"><span class="ico" inner_html=icons::HOSTS></span></span>
                 <span class="li-text">
                     <span class="li-title mono">{id.clone()}</span>
-                    <span class="li-sub">{move || if text(store, &format!("/shared/agents/{}", escape(&status))) == HIDDEN { "Token stored" } else { "New token, save to activate" }}</span>
+                    <span class="li-sub">{move || if text(store, &format!("/shared/agents/{}", escape(&status))) == HIDDEN { "Token stored" } else { "New token" }}</span>
                 </span>
                 <button class="btn small" type="button" on:click=move |_| {
                     let id = renew.clone();
@@ -453,7 +467,7 @@ fn agents(store: Store) -> impl IntoView {
                             <span class="ico" inner_html=icons::COPY></span>"Copy"
                         </button>
                     </div>
-                    <p>"Shown once. Put it into the agent config, add the second node under [[nodes]] too if you run one, then save here."</p>
+                    <p>"Shown once. Put it into the agent config, and add the second node under [[nodes]] too if you run one."</p>
                     <pre class="code">{config}</pre>
                 </div>
             }
@@ -503,7 +517,7 @@ fn check_card(store: Store, host: String, index: usize) -> impl IntoView {
                 {field("Expected status", number_input(store, p("status"), "any 2xx", true))}
                 {field("Body contains", text_input(store, p("contains"), "optional", true))}
                 {field("Timeout", span_input(store, p("timeout"), true))}
-                {field("JSON field", text_input(store, p("json/0/path"), "status, optional", true))}
+                {field("JSON field", json_path_input(store, p("json")))}
                 {field("Equals", value_input(store, p("json/0/equals"), "ok, true or 200"))}
             }
             .into_any(),
@@ -525,7 +539,7 @@ fn check_card(store: Store, host: String, index: usize) -> impl IntoView {
                 })}
                 {fields}
             </div>
-            <button class="btn small danger card-remove" type="button" aria-label="Remove check" on:click=move |_| write(store, &remove, None)>
+            <button class="btn small danger card-remove" type="button" aria-label="Remove service" on:click=move |_| write(store, &remove, None)>
                 <span class="ico" inner_html=icons::TRASH></span>
             </button>
         </div>
@@ -534,36 +548,62 @@ fn check_card(store: Store, host: String, index: usize) -> impl IntoView {
 
 fn checks(store: Store) -> impl IntoView {
     let hosts = Memo::new(move |_| keys(store, "/shared/agents"));
+    let used = Memo::new(move |_| hosts.get().into_iter().filter(|host| len(store, &format!("/shared/checks/{}", escape(host))) > 0).collect::<Vec<_>>());
+    let chosen = RwSignal::new(String::new());
+    let add = move |_| {
+        let host = Some(chosen.get_untracked()).filter(|h| !h.is_empty()).or_else(|| hosts.with_untracked(|h| h.first().cloned()));
+        let Some(host) = host else { return };
+        let path = format!("/shared/checks/{}", escape(&host));
+        let mut list = read(store, &path).and_then(|v| v.as_array().cloned()).unwrap_or_default();
+        list.push(check_template("http", format!("Service {}", list.len() + 1)));
+        write(store, &path, Some(Value::Array(list)));
+    };
     let host_block = move |host: String| {
         let path = format!("/shared/checks/{}", escape(&host));
-        let (count_path, add_path) = (path.clone(), path.clone());
-        let count = Memo::new(move |_| len(store, &count_path));
+        let count = Memo::new(move |_| len(store, &path));
         let card_host = host.clone();
         view! {
             <section class="block">
-                <div class="block-head">
-                    <h3 class="group-head">{format!("Run by {host}")}</h3>
-                    <button class="btn small" type="button" on:click=move |_| {
-                        let mut list = read(store, &add_path).and_then(|v| v.as_array().cloned()).unwrap_or_default();
-                        list.push(check_template("http", format!("Check {}", list.len() + 1)));
-                        write(store, &add_path, Some(Value::Array(list)));
-                    }>
-                        <span class="ico" inner_html=icons::PLUS></span>"Add check"
-                    </button>
-                </div>
+                <h3 class="group-head">{format!("Run by {host}")}</h3>
                 <For each=move || 0..count.get() key=|i| *i children=move |i| check_card(store, card_host.clone(), i)/>
-                <Show when=move || count.get() == 0>
-                    <p class="empty-note">"No central checks on this host."</p>
-                </Show>
             </section>
         }
     };
     view! {
         <p class="lead">"HTTP, TCP and ping checks are sent to the agent that runs them with its next report. Commands and file checks stay in the agent's own config, the node can never start a program on a host."</p>
-        <For each=move || hosts.get() key=|h| h.clone() children=host_block/>
-        <Show when=move || hosts.with(Vec::is_empty)>
-            <p class="empty-note">"Add a host under Hosts and agents first."</p>
+        <Show when=move || hosts.with(|h| !h.is_empty()) fallback=|| view! { <p class="empty-note">"Add a host under Hosts and agents first."</p> }>
+            <div class="add-row">
+                <select class="input" aria-label="Host that runs the service" prop:value=move || Some(chosen.get()).filter(|c| !c.is_empty()).or_else(|| hosts.with(|h| h.first().cloned())).unwrap_or_default() on:change=move |ev| chosen.set(event_target_value(&ev))>
+                    {move || hosts.get().into_iter().map(|host| view! { <option value=host.clone()>{format!("Run by {host}")}</option> }).collect_view()}
+                </select>
+                <button class="btn" type="button" on:click=add><span class="ico" inner_html=icons::PLUS></span>"Add service"</button>
+            </div>
         </Show>
+        <For each=move || used.get() key=|h| h.clone() children=host_block/>
+        <Show when=move || hosts.with(|h| !h.is_empty()) && used.with(Vec::is_empty)>
+            <p class="empty-note">"No central services yet."</p>
+        </Show>
+    }
+}
+
+fn json_path_input(store: Store, path: String) -> impl IntoView {
+    let shown = format!("{path}/0/path");
+    view! {
+        <input
+            class="input"
+            type="text"
+            spellcheck="false"
+            placeholder="status, optional"
+            prop:value=move || text(store, &shown)
+            on:input=move |ev| {
+                let value = event_target_value(&ev);
+                if value.trim().is_empty() {
+                    write(store, &path, None);
+                } else {
+                    write(store, &format!("{path}/0/path"), Some(Value::String(value)));
+                }
+            }
+        />
     }
 }
 

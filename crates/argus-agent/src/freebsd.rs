@@ -149,6 +149,16 @@ pub fn smart(device: &str) -> Result<Smart, String> {
     Ok(freebsd_parse::nvmecontrol_health(&name, &String::from_utf8_lossy(&output.stdout)))
 }
 
+pub fn pools() -> Vec<(String, u64, u64)> {
+    Command::new("zpool")
+        .args(["list", "-Hp", "-o", "name,size,allocated"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| freebsd_parse::zpool_list(&String::from_utf8_lossy(&output.stdout)))
+        .unwrap_or_default()
+}
+
 pub fn failed_units(_root: &str) -> Result<Vec<String>, String> {
     Err("systemd is not available on FreeBSD".into())
 }

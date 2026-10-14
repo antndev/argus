@@ -12,6 +12,7 @@ mod zerobyte;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 use std::thread;
@@ -93,9 +94,14 @@ impl App {
         self.config.read().unwrap_or_else(|p| p.into_inner()).clone()
     }
 
-    pub fn apply_config(&self, mut next: Config, bump: bool) -> Result<bool, String> {
+    pub fn apply_config(&self, next: Config, bump: bool) -> Result<bool, String> {
+        self.edit_config(bump, |_| Ok(next))
+    }
+
+    pub fn edit_config(&self, bump: bool, change: impl FnOnce(&Config) -> Result<Config, String>) -> Result<bool, String> {
         let _writer = lock(&self.config_write);
         let current = self.config();
+        let mut next = change(&current)?;
         next.normalize()?;
         next.validate()?;
         if bump && !next.shared.same(&current.shared) {
@@ -211,6 +217,52 @@ impl App {
     }
 }
 
+fn start_agent(config: &Path) {
+    let Some(settings) = ["agent.toml", "agent.json"].into_iter().map(|name| config.with_file_name(name)).find(|path| path.is_file()) else {
+        return;
+    };
+    let binary =
+        std::env::current_exe().map(|exe| exe.with_file_name("argus-agent")).ok().filter(|path| path.is_file()).unwrap_or_else(|| PathBuf::from("argus-agent"));
+    let spawn = move || Command::new(&binary).args(["run", "--config"]).arg(&settings).spawn();
+    let mut child = match spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            log(&format!("cannot start the built-in agent: {error}"));
+            return;
+        }
+    };
+    log("started the built-in agent");
+    thread::spawn(move || {
+        loop {
+            let status = child.wait().map_or_else(|error| error.to_string(), |status| status.to_string());
+            log(&format!("the built-in agent stopped ({status}), starting it again in 30 s"));
+            thread::sleep(Duration::from_secs(30));
+            match spawn() {
+                Ok(next) => child = next,
+                Err(error) => {
+                    log(&format!("cannot start the built-in agent: {error}"));
+                    return;
+                }
+            }
+        }
+    });
+}
+
+#[cfg(unix)]
+fn leave_root() -> Result<(), String> {
+    const NOBODY: libc::uid_t = 65534;
+    if unsafe { libc::geteuid() } != 0 {
+        return Ok(());
+    }
+    let left = unsafe { libc::setgroups(0, std::ptr::null()) == 0 && libc::setgid(NOBODY) == 0 && libc::setuid(NOBODY) == 0 };
+    if left { Ok(()) } else { Err(format!("cannot leave root: {}, the container needs the SETUID and SETGID capabilities", std::io::Error::last_os_error())) }
+}
+
+#[cfg(not(unix))]
+fn leave_root() -> Result<(), String> {
+    Ok(())
+}
+
 pub fn log(message: &str) {
     eprintln!("argus-node: {message}");
 }
@@ -287,6 +339,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/v1/push/devices", post(notify::subscribe))
         .route("/api/v1/messages", get(notify::messages))
         .route("/api/v1/order", post(api::order))
+        .route("/api/v1/backups/remove", post(zerobyte::removal))
         .route("/api/v1/password", post(session::change))
         .route_layer(axum::middleware::from_fn_with_state(app.clone(), session::require));
     let dashboard = Router::new()
@@ -353,6 +406,10 @@ async fn main() {
         eprintln!("{error}");
         std::process::exit(1);
     };
+    if !checking && !resetting {
+        start_agent(&path);
+    }
+    leave_root().unwrap_or_else(|error| fail(error));
     let mut config = load_or_create(&path, !checking && !resetting).unwrap_or_else(|error| fail(error));
     let hashed = config.clone();
     config.normalize().and_then(|_| config.validate()).unwrap_or_else(|error| fail(format!("invalid config {}: {error}", path.display())));

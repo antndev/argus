@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use argus_model::{Alert, AlertState, Event, HostSummary, Overview, metric_key};
+use argus_model::{Alert, AlertState, Event, HostSummary, Overview};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
@@ -188,8 +188,7 @@ impl Store {
 
     pub async fn settled(&self) -> bool {
         for _ in 0..50 {
-            let dirty = self.config.with_untracked(|c| c.is_some() && *c != self.saved.with_untracked(|s| s.as_ref().map(|s| s.config.clone())));
-            if !dirty && !self.saving.get_untracked() {
+            if !untrack(|| self.dirty()) && !self.saving.get_untracked() {
                 return true;
             }
             if self.save_error.with_untracked(Option::is_some) && !self.saving.get_untracked() {
@@ -285,10 +284,6 @@ impl Store {
         list
     }
 
-    pub fn active_count(&self) -> usize {
-        self.alerts().len()
-    }
-
     pub fn notify(&self, message: impl Into<String>) {
         let id = self.toasts.get_value() + 1;
         self.toasts.set_value(id);
@@ -333,10 +328,6 @@ pub fn hottest(host: &HostSummary) -> Option<(String, f64, f64)> {
         .into_iter()
         .map(|m| (m.item.clone(), m.value, limit(host, &m.group, &m.item, &m.field).unwrap_or(85.0)))
         .max_by(|a, b| (a.1 / a.2).total_cmp(&(b.1 / b.2)))
-}
-
-pub fn key(group: &str, item: &str, field: &str) -> String {
-    metric_key(group, item, field)
 }
 
 pub fn use_store() -> Store {

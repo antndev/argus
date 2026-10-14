@@ -31,8 +31,8 @@ pub fn OverviewPage() -> impl IntoView {
         </section>
         <section>
             <div class="sec-head">
-                <h2>"Checks"</h2>
-                <a class="link" href="#/checks">"All checks"</a>
+                <h2>"Services"</h2>
+                <a class="link" href="#/services">"All services"</a>
             </div>
             <ServiceList/>
         </section>

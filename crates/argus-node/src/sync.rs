@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
-use argus_model::{Alert, BackupSchedule, Message, SyncPayload};
+use argus_model::{Alert, AlertState, BackupSchedule, Message, SyncPayload};
 use axum::Json;
 use axum::extract::{Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
@@ -35,7 +35,7 @@ fn build(app: &App, now: i64, cursor: i64, with_samples: bool) -> SyncPayload {
     let db = app.db();
     let samples = if with_samples { db::samples_since(&db, &ids, cursor, SAMPLE_LIMIT) } else { Vec::new() };
     SyncPayload {
-        alerts: db::alerts(&db).into_iter().filter(|a| a.updated > now - DAY).collect(),
+        alerts: db::alerts(&db).into_iter().filter(|a| a.state != AlertState::Resolved || a.updated > now - DAY).collect(),
         events: db::events(&db, 200),
         messages: db::messages(&db).into_iter().filter(|m| m.time > now - DAY).map(|m| Message { delivered: None, ..m }).collect(),
         sent: db::marks(&db, Marks::Sent, now - DAY),
@@ -51,18 +51,28 @@ fn build(app: &App, now: i64, cursor: i64, with_samples: bool) -> SyncPayload {
 }
 
 fn adopt(app: &App, incoming: Option<serde_json::Value>, initiator: bool) {
-    let Some(shared) = incoming.and_then(|value| serde_json::from_value::<Shared>(value).ok()) else {
-        return;
+    let Some(value) = incoming else { return };
+    let mut shared = match serde_json::from_value::<Shared>(value) {
+        Ok(shared) => shared,
+        Err(error) => {
+            log(&format!("ignoring the shared settings of the peer, they do not parse: {error}"));
+            return;
+        }
     };
-    let current = app.config();
-    let newer = shared.revision > current.shared.revision || (!initiator && shared.revision == current.shared.revision);
-    if !newer || shared == current.shared {
-        return;
-    }
-    let mut next = (*current).clone();
-    next.shared = shared;
-    match app.apply_config(next, false) {
-        Ok(_) => log(&format!("took over the shared settings of the {} node", current.peer_name().unwrap_or("peer"))),
+    let taken = app.edit_config(false, |current| {
+        if initiator {
+            shared.checks = current.shared.checks.clone();
+        }
+        let newer = shared.revision > current.shared.revision || (!initiator && shared.revision == current.shared.revision);
+        let mut next = current.clone();
+        if newer {
+            next.shared = shared;
+        }
+        Ok(next)
+    });
+    match taken {
+        Ok(true) => log(&format!("took over the shared settings of the {} node", app.config().peer_name().unwrap_or("peer"))),
+        Ok(false) => {}
         Err(error) => log(&format!("ignoring the shared settings of the peer: {error}")),
     }
 }

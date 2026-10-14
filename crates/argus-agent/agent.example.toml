@@ -1,5 +1,5 @@
 id = "server-1"            # optional, default is the hostname
-site = "home"              # which node owns this host
+site = "internal"          # which node owns this host, its node name
 role = "Docker host"       # optional free text
 os = "Ubuntu 24.04"        # optional, overrides the name from os-release
 interval = 30              # seconds, or "30s", "5m"
@@ -12,7 +12,7 @@ token = "change-me"        # or token_file = "/run/secrets/argus-token"
 checks = true              # run the http, tcp and ping checks this node hands out, false to ignore them
 
 [collectors]
-docker = "http://socket-proxy:2375"                  # optional, Docker API through a read-only socket proxy
+docker = "/var/lib/docker"                           # optional, Docker's data directory on the host, read without the socket
 systemd = false                                      # failed units through the system D-Bus, native binary only (AppArmor blocks it in Docker)
 smart = ["/dev/nvme0"]                               # NVMe devices for SMART health
 filesystems = []                                     # optional allow list of mount points, empty means all

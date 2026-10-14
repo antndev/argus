@@ -1,11 +1,11 @@
-use argus_model::HostSummary;
+use argus_model::{HostSummary, Severity, metric_key as key};
 use leptos::prelude::*;
 
 use crate::charts::{Chart, ChartSpec, Unit};
 use crate::components::{AlertList, Pill, check_severity, segmented};
 use crate::format;
 use crate::icons;
-use crate::store::{Range, key, latest, limit, temperatures, use_store};
+use crate::store::{Range, latest, limit, temperatures, use_store};
 
 fn threshold(spec: ChartSpec, value: Option<f64>, text: impl Fn(f64) -> String) -> ChartSpec {
     match value {
@@ -35,14 +35,14 @@ fn chart_specs(host: &HostSummary) -> Vec<ChartSpec> {
         cpu = cpu.series("I/O wait", key("cpu", "", "iowait"));
     }
     let cpu = threshold(cpu, limit(host, "cpu", "", "total"), |v| format!("Alert at {v}%"));
-    let memory = threshold(
-        ChartSpec::new(id, "Memory", "Percent of RAM", Unit::Percent)
-            .max(100.0)
-            .series("Used", key("memory", "", "used"))
-            .series("Cache", key("memory", "", "cache")),
-        limit(host, "memory", "", "used"),
-        |v| format!("Alert at {v}%"),
-    );
+    let mut memory = ChartSpec::new(id, "Memory", "Percent of RAM", Unit::Percent)
+        .max(100.0)
+        .series("Used", key("memory", "", "used"))
+        .series("Cache", key("memory", "", "cache"));
+    if !host.inventory.containers.is_empty() && host.info.memory_bytes > 0 {
+        memory = memory.scaled("Containers", key("docker", "*", "memory"), 1_048_576.0 * 100.0 / host.info.memory_bytes as f64);
+    }
+    let memory = threshold(memory, limit(host, "memory", "", "used"), |v| format!("Alert at {v}%"));
     let load_note = match limit(host, "load", "", "5") {
         Some(value) => format!("{} cores, alert above {value}", host.info.cores),
         None => format!("{} cores", host.info.cores),
@@ -195,6 +195,9 @@ pub fn HostPage(host_id: String) -> impl IntoView {
     };
     let checks = move || host.with(|h| h.as_ref().map(|h| h.checks.clone()).unwrap_or_default());
     let many_interfaces = move || interfaces().len() > 1;
+    let waiting = move || host.with(|h| h.as_ref().is_some_and(|h| h.last_seen == 0));
+    let scoped = StoredValue::new(host_id.clone());
+    let alerting = move || store.alerts().iter().any(|a| scoped.with_value(|id| a.host == *id));
 
     view! {
         <div class="detail-head">
@@ -206,14 +209,17 @@ pub fn HostPage(host_id: String) -> impl IntoView {
                     <span class="dim">{seen}</span>
                 </div>
             </div>
-            {segmented(store.range, Range::OPTIONS, "Time range")}
+            <Show when=move || !waiting()>{segmented(store.range, Range::OPTIONS, "Time range")}</Show>
         </div>
-        <Show when=move || store.loaded() && host.with(|h| h.as_ref().is_none_or(|h| h.last_seen == 0))>
+        <Show when=move || store.loaded() && waiting()>
             <p class="empty-note">"No report yet. Install the agent on this host with its token from Settings, Hosts and agents, it shows up here within 30 seconds."</p>
         </Show>
-        <section>
-            <AlertList host=id.clone()/>
-        </section>
+        <Show when=move || !waiting()>
+        <Show when=alerting>
+            <section>
+                <AlertList host=scoped.get_value()/>
+            </section>
+        </Show>
         <div class="chart-grid">{move || specs.get().into_iter().map(|spec| view! { <Chart spec=spec/> }).collect_view()}</div>
         <div class="two">
             <section>
@@ -227,10 +233,10 @@ pub fn HostPage(host_id: String) -> impl IntoView {
         </div>
         <Show when=move || !checks().is_empty()>
             <section>
-                <div class="sec-head"><h2>"Checks"</h2></div>
+                <div class="sec-head"><h2>"Services"</h2></div>
                 <div class="tbl-wrap stack">
                     <table>
-                        <thead><tr><th>"Status"</th><th>"Check"</th><th>"Type"</th><th>"Result"</th><th class="num">"Latency"</th></tr></thead>
+                        <thead><tr><th>"Status"</th><th>"Service"</th><th>"Type"</th><th>"Result"</th><th class="num">"Latency"</th></tr></thead>
                         <tbody>
                             {move || checks().into_iter().map(|c| view! {
                                 <tr>
@@ -249,21 +255,21 @@ pub fn HostPage(host_id: String) -> impl IntoView {
         <Show when=move || !containers().is_empty()>
             <section>
                 <div class="sec-head"><h2>"Containers"</h2></div>
-                <div class="tbl-wrap">
+                <div class="tbl-wrap stack">
                     <table>
                         <thead>
-                            <tr><th>"Container"</th><th>"State"</th><th class="num">"CPU"</th><th class="num">"Memory"</th><th class="num">"Restarts"</th><th>"Status"</th></tr>
+                            <tr><th>"State"</th><th>"Container"</th><th class="num hide-sm">"CPU"</th><th class="num">"Memory"</th><th class="num hide-sm">"Restarts"</th><th>"Status"</th></tr>
                         </thead>
                         <tbody>
                             {move || containers().into_iter().map(|c| {
-                                let running = c.state == "running";
+                                let (severity, text) = container_state(&c);
                                 view! {
                                     <tr>
+                                        <td><Pill severity=severity text=text/></td>
                                         <td class="mono">{c.name.clone()}</td>
-                                        <td><Pill severity=if running { argus_model::Severity::Ok } else { argus_model::Severity::Warning } text=format::capitalize(&c.state)/></td>
-                                        <td class="num">{format!("{:.1}%", c.cpu)}</td>
+                                        <td class="num hide-sm">{format!("{:.1}%", c.cpu)}</td>
                                         <td class="num">{format::memory(c.memory_bytes as f64 / 1_048_576.0)}</td>
-                                        <td class="num">{c.restarts.to_string()}</td>
+                                        <td class="num hide-sm">{c.restarts.to_string()}</td>
                                         <td class="dim">{c.status.clone()}</td>
                                     </tr>
                                 }
@@ -282,7 +288,7 @@ pub fn HostPage(host_id: String) -> impl IntoView {
                         <tbody>
                             {move || interfaces().into_iter().map(|(label, name, rx, tx)| view! {
                                 <tr>
-                                    <td>{label}<span class="sub mono">{name}</span></td>
+                                    <td>{label.clone()}{(label != name).then(|| view! { <span class="sub mono">{name.clone()}</span> })}</td>
                                     <td class="num">{rx}</td>
                                     <td class="num">{tx}</td>
                                 </tr>
@@ -292,5 +298,17 @@ pub fn HostPage(host_id: String) -> impl IntoView {
                 </div>
             </section>
         </Show>
+        </Show>
+    }
+}
+
+fn container_state(container: &argus_model::Container) -> (Severity, String) {
+    match (container.state.as_str(), container.health.as_str()) {
+        ("running", "healthy") => (Severity::Ok, "Healthy".into()),
+        ("running", "unhealthy") => (Severity::Critical, "Unhealthy".into()),
+        ("running", "starting") => (Severity::Muted, "Starting".into()),
+        ("running", _) => (Severity::Ok, "Running".into()),
+        ("paused" | "restarting" | "dead", _) => (Severity::Warning, format::capitalize(&container.state)),
+        (state, _) => (Severity::Muted, format::capitalize(state)),
     }
 }

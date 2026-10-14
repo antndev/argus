@@ -44,13 +44,13 @@ jobs:
           components: clippy
 
       - name: Run tests
-        run: cargo test --workspace --exclude argus-ui
+        run: cargo test --locked --workspace --exclude argus-ui
 
       - name: Lint agent and node
-        run: cargo clippy --workspace --exclude argus-ui --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --exclude argus-ui --all-targets -- -D warnings
 
       - name: Lint dashboard
-        run: cargo clippy -p argus-ui --target wasm32-unknown-unknown -- -D warnings
+        run: cargo clippy --locked -p argus-ui --target wasm32-unknown-unknown -- -D warnings
 
   publish:
     needs: test
