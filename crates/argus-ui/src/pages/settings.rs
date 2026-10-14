@@ -645,14 +645,15 @@ fn this_device(store: Store) -> impl IntoView {
     let name = RwSignal::new("iPhone".to_string());
     let busy = RwSignal::new(false);
     let enable = move |_| {
-        let key = saved(store, "/shared/push/public_key").and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
-        if store.dirty() || key.is_empty() {
-            store.notify("The settings are still saving, try again in a moment");
-            return;
-        }
         busy.set(true);
         let device = name.get_untracked();
         spawn_local(async move {
+            let key = if store.settled().await { saved(store, "/shared/push/public_key").and_then(|v| v.as_str().map(str::to_string)) } else { None };
+            let Some(key) = key.filter(|k| !k.is_empty()) else {
+                store.notify("Not enabled, the settings could not be saved");
+                busy.set(false);
+                return;
+            };
             let result = match push_subscribe(&key).await {
                 Ok(value) => {
                     let mut body: Value = value.as_string().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
@@ -724,6 +725,10 @@ fn notifications(store: Store) -> impl IntoView {
     };
     let test = move |_| {
         spawn_local(async move {
+            if !store.settled().await {
+                store.notify("Not sent, the settings could not be saved");
+                return;
+            }
             match api::post::<_, Value>("/api/v1/notify-test", &json!({})).await {
                 Ok(reply) => store.notify(format!("Test notification {}", reply["result"].as_str().unwrap_or("sent"))),
                 Err(failure) => store.notify(format!("Test failed, {failure}")),

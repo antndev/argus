@@ -186,6 +186,23 @@ impl Store {
         );
     }
 
+    pub async fn settled(&self) -> bool {
+        for _ in 0..50 {
+            let dirty = self.config.with_untracked(|c| c.is_some() && *c != self.saved.with_untracked(|s| s.as_ref().map(|s| s.config.clone())));
+            if !dirty && !self.saving.get_untracked() {
+                return true;
+            }
+            if self.save_error.with_untracked(Option::is_some) && !self.saving.get_untracked() {
+                return false;
+            }
+            if !self.saving.get_untracked() {
+                self.save_config();
+            }
+            pause(100).await;
+        }
+        false
+    }
+
     fn save_config(&self) {
         let store = *self;
         let (Some(config), Some(version)) = (self.config.get_untracked(), self.saved.with_untracked(|s| s.as_ref().map(|s| s.version.clone()))) else {
@@ -332,4 +349,11 @@ fn typing() -> bool {
         "INPUT" => !matches!(element.get_attribute("type").as_deref(), Some("checkbox" | "radio" | "button" | "submit" | "range")),
         _ => false,
     })
+}
+
+async fn pause(ms: i32) {
+    let promise = js_sys::Promise::new(&mut |resolve, _| {
+        let _ = window().set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms);
+    });
+    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
 }

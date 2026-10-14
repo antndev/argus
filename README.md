@@ -1,19 +1,20 @@
 # Argus
 
-Lightweight self-hosted monitoring. Small agents report host metrics and check results, two nodes watch each other,
-one dashboard is generated from what the agents report, and alerts reach your phone as encrypted web push
-notifications, with no app store app and no relay service in between.
+Self-hosted monitoring for a handful of servers. Small agents report metrics and check results to a node, the node
+builds the dashboard from what it receives and sends alerts to your phone as encrypted web push notifications. A
+second node outside your network can watch the first one and take over when it is gone.
 
-- **Agent**: one static binary for Linux (amd64, arm64) and FreeBSD, a container image and a Home Assistant add-on.
-  Collects CPU, memory, load, filesystems, network per interface, temperatures per sensor, mdraid, NVMe SMART, Docker
-  containers, failed systemd units and pending reboots, and runs http, tcp, ping, file age and exec checks.
-- **Node**: stores everything in SQLite, evaluates alert rules, serves the dashboard and sends web push notifications.
-  Two nodes sync every 15 seconds and take over for each other.
-- **Dashboard**: Leptos and uPlot, built into the node binary. Installed on the home screen it is also the app that
-  receives the notifications.
-- **ZeroByte integration**: Argus fully supports [ZeroByte](https://github.com/nicotsx/zerobyte) backups. It takes every
-  backup event from ZeroByte's webhooks, reads the S3 mirror status from the ZeroByte API and alerts when a backup or
-  mirror fails or is overdue.
+## What it does
+
+- Agent as one static binary for Linux (amd64, arm64) and FreeBSD, as a container image and as a Home Assistant
+  add-on. It collects CPU, memory, load, filesystems, network per interface, temperatures per sensor, mdraid, NVMe
+  SMART, Docker containers, failed systemd units and pending reboots, and runs http, tcp, ping, file age and exec
+  checks.
+- Node with SQLite storage, alert rules, the dashboard and web push. Two nodes sync every 15 seconds.
+- Dashboard in Leptos with uPlot charts, built into the node binary. Added to the home screen of a phone it is also
+  the app that receives the notifications. No app store app and no relay service.
+- [ZeroByte](https://github.com/nicotsx/zerobyte) integration. Argus takes every backup event from ZeroByte's
+  webhooks, reads the S3 mirror status from the ZeroByte API and alerts when a backup or mirror fails or is overdue.
 
 ## How it fits together
 
@@ -26,12 +27,10 @@ agents ──HTTPS──▶ internal node ◀──sync, started by internal─�
                          Argus on your phone's home screen
 ```
 
-- One internal node is enough. The external node is optional: it watches your network from the outside and takes
-  over when the internal node is gone. Without it, leave out `peer` (Settings, External node, off).
+- One internal node is enough. Without an external node leave out `peer` (Settings, External node, Two nodes off).
 - Every host belongs to one node (its `site`). That node evaluates the host's rules and sends its alerts.
-- Agents at home report to both nodes, so the external node can take over when the internal node is gone. After 60 seconds
-  without sync each node takes over the hosts it still receives reports from. An alert that was already sent is
-  never sent again.
+- Agents at home report to both nodes. After 60 seconds without sync each node takes over the hosts it still
+  receives reports from. An alert that was already sent is never sent again.
 - The node that raises an alert encrypts it for each phone and hands it to the phone's push service directly. The
   text travels inside the encrypted message, so the phone never has to reach a node to read it.
 - Nothing ever connects into the home network: the internal node starts every sync.
@@ -45,9 +44,9 @@ argus-node token       # prints a new random token
 argus-node reset-password --config /data/argus.json   # forgot the dashboard password
 ```
 
-Everything is configured either in the dashboard under Settings or in the JSON file, whichever you prefer. Both
-stay in sync: the dashboard writes the file, and changes to the file apply within a few seconds. If the file does
-not exist the node creates it with defaults. Agent tokens may be written in clear text, the node replaces them with
+Everything is configured either in the dashboard under Settings or in the JSON file. Changes in the dashboard save
+on their own and go to the file, changes to the file apply within a few seconds. If the file does not exist the node
+creates it with defaults. Agent tokens may be written in clear text, the node replaces them with
 their sha256 on the next load. The dashboard never shows secrets, only whether one is stored.
 
 The dashboard always needs a password, and it is never part of the config file. On the first visit the dashboard asks
@@ -58,12 +57,11 @@ If it is lost, run `argus-node reset-password` on the server (in Docker:
 With two nodes the internal node owns the password and hands it to the external node with every sync, together with
 the key that signs sessions, so one login works on both. Set, change and reset it on the internal node.
 
-A naming suggestion for two nodes: `argus.internal.example.com` for the internal node with the dashboard, reachable
-only inside your network, and `argus.external.example.com` for the external node that is reachable from the internet.
-
-To open the phone app at home and on the road, give both nodes one name instead, for example `argus.example.com`:
-your internal DNS points it to the internal node, public DNS to the external node, and the external node serves the
-whole dashboard. The app then talks to whichever node it reaches, with the same login and the same push subscription.
+Give both nodes one name, for example `argus.example.com`. Your internal DNS points it to the internal node, public
+DNS to the external node, and the external node serves the whole dashboard. The phone app then opens at home and on
+the road and talks to whichever node it reaches, with the same login and the same push subscription. If the
+dashboard should not be reachable from the internet, use two names instead (`argus.internal.example.com` and
+`argus.external.example.com`) and expose only the paths in the Caddy example below on the external one.
 
 `crates/argus-node/node.example.json` shows every option. The important parts:
 
@@ -80,7 +78,7 @@ whole dashboard. The app then talks to whichever node it reaches, with the same 
     warnings, failed systemd units and pending reboots always alert.
   - `push`: the contact address the push services ask for, the key pair (created on the first start), the
     addresses where phones confirm receipt, an optional daily status message and the registered devices.
-  - `backup_max_age` and `retention`.
+  - `backup_max_age`, `retention` (every report, 5 minute, hourly and daily averages) and the host `order`.
 
 Removing a host from `agents` also removes it from the dashboard. Its history stays until retention removes it.
 
@@ -136,8 +134,9 @@ services:
 
 Set `root = "/host"` and, because the agent uses the host network, `docker = "http://127.0.0.1:2375"` in the agent
 config. `rslave` makes filesystems mounted after the container started (a late RAID, a remount after maintenance)
-visible to the agent; Docker Desktop does not support it, drop it there. For NVMe SMART add `devices: ["/dev/nvme0"]` and `cap_add: [SYS_ADMIN]`.
-`LOG_LEVEL: warning` keeps the proxy from logging every request the agent makes.
+visible to the agent; Docker Desktop does not support it, drop it there. For NVMe SMART add
+`devices: ["/dev/nvme0"]` and `cap_add: [SYS_ADMIN]`. `LOG_LEVEL: warning` keeps the proxy from logging every request
+the agent makes.
 
 Leave `systemd` off in a container. The collector asks the host's D-Bus for failed units, and the default AppArmor
 profile of Docker on Ubuntu blocks that connection. The native binary on a Linux host can use it.
@@ -174,10 +173,10 @@ Argus uses the web push standard. The node encrypts every notification for each 
 it to that phone's push service, Apple's on an iPhone. The push service only sees encrypted bytes. No account, app
 store app or third-party relay is needed.
 
-1. Turn on Settings, Notifications and save. The node creates its push key pair.
+1. Turn on phone notifications under Settings, Notifications. The node creates its push key pair.
 2. On the iPhone (iOS 16.4 or later) open the dashboard in Safari over HTTPS, tap Share, Add to Home Screen, and open
    Argus from the home screen.
-3. In Settings, Notifications tap Enable and allow notifications.
+3. In Settings, Notifications tap Enable and allow notifications, then send a test notification.
 
 The phone confirms every notification to the addresses in `push.receipt_urls`, so list the dashboard and the node
 that is reachable from outside. Settings, Notifications shows which messages were confirmed. With `status_every`
@@ -186,13 +185,14 @@ subscription is removed automatically and logged.
 
 ## ZeroByte integration
 
-Argus has a full ZeroByte integration, configured under Settings, ZeroByte integration or in the `zerobyte` block:
+Configured under Settings, ZeroByte integration or in the `zerobyte` block. Argus only reads, it never starts or
+changes a backup.
 
-- **Webhook**: in ZeroByte add a notification destination of type Generic Webhook with method POST, JSON enabled and
-  the keys `title` and `message`, URL `https://<node>/api/v1/hooks/zerobyte/<webhook_token>`. Enable start, success,
-  warning and failure on every backup schedule. Add the node's origin to ZeroByte's `WEBHOOK_ALLOWED_ORIGINS`.
-- **Mirrors**: ZeroByte reports S3 mirror syncs only when they fail. Set `url` and `api_key` in `zerobyte` and the
-  node also polls the API for the last mirror sync of every schedule.
+- Webhook. In ZeroByte add a notification destination of type Generic Webhook with method POST, JSON enabled and the
+  keys `title` and `message`, URL `https://<node>/api/v1/hooks/zerobyte/<webhook_token>`. Enable start, success,
+  warning and failure on every backup schedule and add the node's origin to ZeroByte's `WEBHOOK_ALLOWED_ORIGINS`.
+- API, optional. ZeroByte reports S3 mirror syncs only when they fail. With `url` and `api_key` set the node also asks
+  the API for the last run of every schedule and its mirrors.
 - Argus alerts when a backup or mirror fails or when no success arrived within `shared.backup_max_age` (default 25 h).
 
 ## Images
