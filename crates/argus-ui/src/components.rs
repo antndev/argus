@@ -157,8 +157,23 @@ pub fn HostCard(id: String, index: usize) -> impl IntoView {
         let id = host.with(|h| h.as_ref().map(|h| h.info.id.clone())).unwrap_or_default();
         store.alerts().iter().filter(|(a, m)| a.host == id && m.is_some()).count()
     };
-    let meta = move || host.with(|h| h.as_ref().map(|h| format!("{}, {}", h.info.os, h.info.arch)).unwrap_or_default());
-    let seen = move || host.with(|h| h.as_ref().map(|h| format!("Last report {}", format::ago(h.last_seen as f64, store.clock.get()))).unwrap_or_default());
+    let waiting = move || host.with(|h| h.as_ref().is_some_and(|h| h.last_seen == 0));
+    let meta = move || {
+        host.with(|h| h.as_ref().map(|h| if h.last_seen == 0 { "Waiting for the first report".to_string() } else { format!("{}, {}", h.info.os, h.info.arch) }))
+            .unwrap_or_default()
+    };
+    let seen = move || {
+        host.with(|h| {
+            h.as_ref().map(|h| {
+                if h.last_seen == 0 {
+                    "Start the agent with its token".to_string()
+                } else {
+                    format!("Last report {}", format::ago(h.last_seen as f64, store.clock.get()))
+                }
+            })
+        })
+        .unwrap_or_default()
+    };
     let disk = move || host.with(|h| h.as_ref().and_then(fullest));
     let heat = move || host.with(|h| h.as_ref().and_then(hottest));
     let has_heat = move || heat().is_some();
@@ -192,6 +207,7 @@ pub fn HostCard(id: String, index: usize) -> impl IntoView {
     view! {
         <a
             class=move || format!("host-card {}", class(state()))
+            class:pending=waiting
             class:drop=move || target.get()
             class:dragging=move || store.dragging.with(|d| d.as_deref() == Some(dragged.as_str()))
             href=href
@@ -216,7 +232,7 @@ pub fn HostCard(id: String, index: usize) -> impl IntoView {
             <div class="hc-id">
                 <div class="hc-top">
                     <span class="hc-name">{id.clone()}</span>
-                    {move || view! { <Pill severity=state()/> }}
+                    {move || if waiting() { view! { <Pill severity=Severity::Muted text="Waiting"/> }.into_any() } else { view! { <Pill severity=state()/> }.into_any() }}
                     {move || {
                         let count = muted();
                         (count > 0).then(|| view! { <span class="hc-muted">{format!("{count} muted")}</span> })

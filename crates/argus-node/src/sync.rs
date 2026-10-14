@@ -123,9 +123,6 @@ pub async fn serve(State(app): State<Arc<App>>, request: Request) -> Response {
     let Some(peer) = app.config().peer.clone() else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    if app.simulated(crate::simulate::NODE, "peer") {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    }
     if !bearer(request.headers()).is_some_and(|token| same_secret(token, &peer.token)) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
@@ -165,9 +162,7 @@ pub fn run(app: &App, wake: &Receiver<()>) {
         let cursor = app.peer_state().cursor;
         let mut payload = build(app, now, cursor, false);
         payload.cursor = cursor;
-        let result =
-            if app.simulated(crate::simulate::NODE, "peer") { Err("paused by the simulation".to_string()) } else { exchange(&url, &peer.token, &payload) };
-        match result {
+        match exchange(&url, &peer.token, &payload) {
             Ok(response) => {
                 if failing {
                     log(&format!("sync with {} node restored", peer.name));

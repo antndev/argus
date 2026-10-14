@@ -5,13 +5,12 @@ mod notify;
 mod push;
 mod rules;
 mod session;
-mod simulate;
 mod sync;
 mod ui;
 mod util;
 mod zerobyte;
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
@@ -49,7 +48,6 @@ pub struct App {
     queue: Mutex<Option<Sender<Message>>>,
     pending: Mutex<HashSet<String>>,
     sessions: Mutex<HashMap<String, i64>>,
-    faults: Mutex<BTreeMap<String, BTreeSet<String>>>,
     pub argon: tokio::sync::Semaphore,
     pub started: i64,
 }
@@ -82,7 +80,6 @@ impl App {
             queue: Mutex::new(None),
             pending: Mutex::new(HashSet::new()),
             sessions: Mutex::new(HashMap::new()),
-            faults: Mutex::new(BTreeMap::new()),
             argon: tokio::sync::Semaphore::new(1),
             started: now_ms(),
         }
@@ -148,38 +145,6 @@ impl App {
         lock(&self.sessions)
     }
 
-    pub fn faults(&self) -> BTreeMap<String, BTreeSet<String>> {
-        lock(&self.faults).clone()
-    }
-
-    pub fn faults_of(&self, host: &str) -> Vec<String> {
-        if !self.config().simulate {
-            return Vec::new();
-        }
-        lock(&self.faults).get(host).map(|f| f.iter().cloned().collect()).unwrap_or_default()
-    }
-
-    pub fn simulated(&self, host: &str, fault: &str) -> bool {
-        self.faults_of(host).iter().any(|f| f == fault)
-    }
-
-    pub fn toggle_fault(&self, host: &str, fault: &str) -> bool {
-        let mut faults = lock(&self.faults);
-        let set = faults.entry(host.to_string()).or_default();
-        let active = if set.remove(fault) {
-            false
-        } else {
-            set.insert(fault.to_string());
-            true
-        };
-        faults.retain(|_, set| !set.is_empty());
-        active
-    }
-
-    pub fn clear_faults(&self) {
-        lock(&self.faults).clear();
-    }
-
     pub fn snapshots(&self) -> Vec<HostSnapshot> {
         self.hosts.read().unwrap_or_else(|p| p.into_inner()).values().cloned().collect()
     }
@@ -220,9 +185,6 @@ impl App {
     }
 
     pub fn store_report(&self, mut report: Report, now: i64) {
-        if !simulate::apply(self, &mut report) {
-            return;
-        }
         report.time = now;
         let host = report.host.id.clone();
         {
@@ -323,7 +285,6 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/v1/config", put(api::put_config))
         .route("/api/v1/token", get(api::token))
         .route("/api/v1/notify-test", post(api::notify_test))
-        .route("/api/v1/simulate", get(simulate::get).post(simulate::toggle))
         .route("/api/v1/push/devices", post(notify::subscribe))
         .route("/api/v1/messages", get(notify::messages))
         .route("/api/v1/order", post(api::order))

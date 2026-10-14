@@ -58,22 +58,11 @@ pub struct ChartSpec {
     max: Option<f64>,
     floor: f64,
     thresholds: Vec<(f64, String)>,
-    wide: bool,
 }
 
 impl ChartSpec {
     pub fn new(host: &str, title: &str, note: impl Into<String>, unit: Unit) -> Self {
-        Self {
-            host: host.to_string(),
-            title: title.to_string(),
-            note: note.into(),
-            unit,
-            series: Vec::new(),
-            max: None,
-            floor: 0.0,
-            thresholds: Vec::new(),
-            wide: false,
-        }
+        Self { host: host.to_string(), title: title.to_string(), note: note.into(), unit, series: Vec::new(), max: None, floor: 0.0, thresholds: Vec::new() }
     }
 
     pub fn series(mut self, label: &str, key: String) -> Self {
@@ -93,11 +82,6 @@ impl ChartSpec {
 
     pub fn threshold(mut self, value: f64, label: impl Into<String>) -> Self {
         self.thresholds.push((value, label.into()));
-        self
-    }
-
-    pub fn wide(mut self, wide: bool) -> Self {
-        self.wide = wide;
         self
     }
 
@@ -132,7 +116,6 @@ pub fn Chart(spec: ChartSpec) -> impl IntoView {
     let unit = spec.unit;
     let title = spec.title.clone();
     let note = spec.note.clone();
-    let wide = spec.wide;
     let labels: Vec<String> = spec.series.iter().map(|(label, _)| label.clone()).collect();
     let spec = StoredValue::new(spec);
 
@@ -191,7 +174,7 @@ pub fn Chart(spec: ChartSpec) -> impl IntoView {
         .collect_view();
 
     view! {
-        <section class="panel" class:wide=wide>
+        <section class="panel">
             <header class="panel-head">
                 <h3>{title}</h3>
                 <span class="meta">{note}</span>

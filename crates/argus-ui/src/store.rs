@@ -60,8 +60,6 @@ pub struct Store {
     pub config: RwSignal<Option<serde_json::Value>>,
     pub saved: RwSignal<Option<ConfigView>>,
     pub saving: RwSignal<bool>,
-    pub simulation: RwSignal<Option<serde_json::Value>>,
-    pub simulation_help: RwSignal<bool>,
     pub dragging: RwSignal<Option<String>>,
     toasts: StoredValue<u64>,
 }
@@ -92,8 +90,6 @@ impl Store {
             config: RwSignal::new(None),
             saved: RwSignal::new(None),
             saving: RwSignal::new(false),
-            simulation: RwSignal::new(None),
-            simulation_help: RwSignal::new(false),
             dragging: RwSignal::new(None),
             toasts: StoredValue::new(0),
         }
@@ -177,7 +173,6 @@ impl Store {
                     store.config.set(Some(view.config.clone()));
                     store.saved.set(Some(view));
                     store.refresh();
-                    crate::simulation::load(store);
                 }
                 Err(failure) if failure.status == 401 => store.locked.set(true),
                 Err(failure) => store.notify(format!("Not saved, {failure}")),

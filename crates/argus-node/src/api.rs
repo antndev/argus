@@ -2,7 +2,7 @@ use std::io::Read;
 use std::sync::Arc;
 
 use argus_model::{
-    Alert, AlertState, Event, HostSummary, IngestReply, Message, Mute, MuteRequest, NodeStatus, Overview, Report, RuleInfo, SeriesData, Severity,
+    Alert, AlertState, Event, HostInfo, HostSummary, IngestReply, Message, Mute, MuteRequest, NodeStatus, Overview, Report, RuleInfo, SeriesData, Severity,
 };
 use axum::Json;
 use axum::extract::{Path, Query, Request, State};
@@ -74,9 +74,7 @@ pub async fn overview(State(app): State<Arc<App>>) -> Json<Overview> {
     };
     let config = app.config();
     let me = config.name.clone();
-    let mut snapshots = snapshots;
-    snapshots.sort_by_key(|s| config.shared.order.iter().position(|id| *id == s.report.host.id).unwrap_or(usize::MAX));
-    let hosts = snapshots
+    let mut hosts: Vec<HostSummary> = snapshots
         .into_iter()
         .map(|snapshot| {
             let report = snapshot.report;
@@ -97,6 +95,14 @@ pub async fn overview(State(app): State<Arc<App>>) -> Json<Overview> {
             }
         })
         .collect();
+    let waiting = config.shared.agents.keys().filter(|id| !hosts.iter().any(|h| h.info.id == **id)).cloned().collect::<Vec<_>>();
+    hosts.extend(waiting.into_iter().map(|id| HostSummary {
+        info: HostInfo { id, site: me.clone(), ..Default::default() },
+        state: Severity::Muted,
+        owner: me.clone(),
+        ..Default::default()
+    }));
+    hosts.sort_by_key(|h| config.shared.order.iter().position(|id| *id == h.info.id).unwrap_or(usize::MAX));
     let mut nodes = vec![NodeStatus { name: me.clone(), site: me, this: true, reachable: true, last_sync: app.peer_state().last_sync }];
     if let Some(peer) = &config.peer {
         nodes.push(NodeStatus {

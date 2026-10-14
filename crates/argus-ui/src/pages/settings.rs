@@ -20,8 +20,8 @@ const PAGES: [(&str, &str); 12] = [
     ("checks", "Checks"),
     ("rules", "Alert rules"),
     ("notifications", "Notifications"),
-    ("peer", "Second node"),
-    ("backups", "Backups"),
+    ("peer", "External node"),
+    ("backups", "ZeroByte integration"),
     ("retention", "Data retention"),
     ("dashboard", "Password"),
     ("appearance", "Appearance"),
@@ -204,6 +204,51 @@ fn value_input(store: Store, path: String, placeholder: &'static str) -> impl In
     }
 }
 
+const UNITS: [(&str, &str); 4] = [("s", "seconds"), ("m", "minutes"), ("h", "hours"), ("d", "days")];
+
+fn split_span(text: &str) -> (String, &'static str) {
+    let text = text.trim();
+    let digits = text.find(|c: char| !c.is_ascii_digit()).unwrap_or(text.len());
+    let unit = UNITS.iter().map(|(unit, _)| *unit).find(|unit| text[digits..].trim() == *unit).unwrap_or("s");
+    (text[..digits].to_string(), unit)
+}
+
+fn span_input(store: Store, path: String, optional: bool) -> impl IntoView {
+    let (number_path, unit_path, shown_number, shown_unit) = (path.clone(), path.clone(), path.clone(), path);
+    let store_span = move |path: &str, number: String, unit: &str| {
+        let value = if number.trim().is_empty() && optional { None } else { Some(json!(format!("{}{unit}", number.trim()))) };
+        write(store, path, value);
+    };
+    view! {
+        <div class="span-input">
+            <input
+                class="input"
+                type="number"
+                min="0"
+                inputmode="numeric"
+                aria-label="Amount"
+                prop:value=move || split_span(&text(store, &shown_number)).0
+                on:input=move |ev| {
+                    let unit = split_span(&text(store, &number_path)).1;
+                    store_span(&number_path, event_target_value(&ev), unit);
+                }
+            />
+            <select
+                class="input"
+                aria-label="Unit"
+                prop:value=move || split_span(&text(store, &shown_unit)).1
+                on:change=move |ev| {
+                    let number = split_span(&text(store, &unit_path)).0;
+                    let unit = event_target_value(&ev);
+                    store_span(&unit_path, if number.is_empty() { "1".to_string() } else { number }, &unit);
+                }
+            >
+                {UNITS.iter().map(|(unit, label)| view! { <option value=*unit>{*label}</option> }).collect_view()}
+            </select>
+        </div>
+    }
+}
+
 fn number_input(store: Store, path: String, placeholder: &'static str, optional: bool) -> impl IntoView {
     let shown = path.clone();
     view! {
@@ -348,7 +393,6 @@ fn general(store: Store) -> impl IntoView {
         {row("Listen address", "Address and port of the web server. Takes effect after a restart.", text_input(store, "/listen".into(), "0.0.0.0:8090", false))}
         {row("Database", "SQLite file, relative to the config file. Takes effect after a restart.", text_input(store, "/database".into(), "argus.db", false))}
         {row("Config file", "Edit this file or this page, both stay in sync. Changes to the file apply within seconds.", view! { <span class="mono value">{path}</span> })}
-        {row("Fault simulation", "Keyboard shortcuts in the dashboard fake problems on real hosts, so every alert path can be tried once. Press ? to see them. Simulated values also land in the history.", switch(store, "/simulate", || json!(true)))}
         {row("Shared settings", "Hosts, checks, alert rules, phone notifications, backup age and retention are the same on both nodes. The newer change wins.", view! { <span class="value">{revision}</span> })}
     }
 }
@@ -454,7 +498,7 @@ fn check_card(store: Store, host: String, index: usize) -> impl IntoView {
             "tcp" => view! {
                 {field("Host", text_input(store, p("host"), "db.example.com", false))}
                 {field("Port", number_input(store, p("port"), "5432", false))}
-                {field("Timeout", text_input(store, p("timeout"), "10s", true))}
+                {field("Timeout", span_input(store, p("timeout"), true))}
             }
             .into_any(),
             "ping" => view! { {field("Host", text_input(store, p("host"), "192.0.2.1", false))} }.into_any(),
@@ -462,7 +506,7 @@ fn check_card(store: Store, host: String, index: usize) -> impl IntoView {
                 {field("URL", text_input(store, p("url"), "https://service.example.com/health", false))}
                 {field("Expected status", number_input(store, p("status"), "any 2xx", true))}
                 {field("Body contains", text_input(store, p("contains"), "optional", true))}
-                {field("Timeout", text_input(store, p("timeout"), "10s", true))}
+                {field("Timeout", span_input(store, p("timeout"), true))}
                 {field("JSON field", text_input(store, p("json/0/path"), "status, optional", true))}
                 {field("Equals", value_input(store, p("json/0/equals"), "ok, true or 200"))}
             }
@@ -560,7 +604,7 @@ fn rule_card(store: Store, index: usize) -> impl IntoView {
                         {move || number_input(store, limit_path.get(), "85", false)}
                     </div>
                 })}
-                {field("For at least", text_input(store, p("for"), "0s", true))}
+                {field("For at least", span_input(store, p("for"), true))}
                 {field("Severity", select_input(store, p("severity"), &[("warning", "Warning"), ("critical", "Critical")]))}
             </div>
             <button class="btn small danger card-remove" type="button" aria-label="Remove rule" on:click=move |_| write(store, &remove, None)>
@@ -717,7 +761,7 @@ fn notifications(store: Store) -> impl IntoView {
         <Show when=enabled>
             {row("Contact", "Apple asks every sender for a mailto: or https:// address.", text_input(store, "/shared/push/subject".into(), "mailto:you@example.com", false))}
             {row("Confirmation addresses", "Where the phone confirms receipt, this dashboard and the node that is reachable from outside.", list_input(store, "/shared/push/receipt_urls".into(), "https://argus.internal.example.com", None))}
-            {row("Status message", "A short daily all clear proves the path works. Empty turns it off.", text_input(store, "/shared/push/status_every".into(), "24h", true))}
+            {row("Status message", "A short daily all clear proves the path works. Empty turns it off.", span_input(store, "/shared/push/status_every".into(), true))}
             {row("This device", "Run once per phone, from the installed Argus app.", this_device(store))}
             {group("Devices")}
             <ul class="entries">
@@ -736,14 +780,21 @@ fn notifications(store: Store) -> impl IntoView {
     }
 }
 
+fn peer_label(store: Store) -> &'static str {
+    match (read(store, "/peer").is_some(), read(store, "/peer/url").is_some()) {
+        (true, false) => "Internal node",
+        _ => "External node",
+    }
+}
+
 fn peer(store: Store) -> impl IntoView {
     let enabled = move || read(store, "/peer").is_some();
     view! {
-        <p class="lead">"Two nodes watch each other. The node with the peer address starts every sync, the other one never connects out. After 60 s without sync each node takes over the hosts it still hears from."</p>
-        {row("Second node", "Turn off for a single node setup.", switch(store, "/peer", || json!({ "name": "vps", "token": "" })))}
+        <p class="lead">"Two nodes watch each other. The internal node starts every sync, so the external node never has to reach into your network. After 60 s without sync each node takes over the hosts it still hears from."</p>
+        {row("Paired node", "Turn off for a single node setup.", switch(store, "/peer", || json!({ "name": "external", "token": "" })))}
         <Show when=enabled>
-            {row("Name", "The other node's name.", text_input(store, "/peer/name".into(), "vps", false))}
-            {row("Address", "Set it only on the node that starts the sync, usually the one at home. Leave it empty on the other node.", text_input(store, "/peer/url".into(), "https://argus.external.example.com", true))}
+            {row("Name", "The other node's name.", text_input(store, "/peer/name".into(), "external", false))}
+            {row("Address", "The external node's address, set on the internal node. Leave it empty on the external node.", text_input(store, "/peer/url".into(), "https://argus.external.example.com", true))}
             {row("Sync token", "The same secret on both nodes, at least 16 characters.", token_input(store, "/peer/token".into(), false))}
         </Show>
     }
@@ -757,24 +808,28 @@ fn backups(store: Store) -> impl IntoView {
         token => format!("{}/api/v1/hooks/zerobyte/{token}", origin()),
     };
     view! {
-        <p class="lead">"ZeroByte reports every backup run by webhook. S3 mirrors only report failures, so the node can also ask the ZeroByte API for the last mirror sync."</p>
-        {row("ZeroByte", "Watch backups and mirrors.", switch(store, "/zerobyte", || json!({ "interval": "5m" })))}
+        <p class="lead">"Argus watches ZeroByte backups. ZeroByte reports every backup run to Argus by webhook. S3 mirrors only report failures, so Argus can also read the last mirror sync from the ZeroByte API."</p>
+        {row("ZeroByte integration", "Watch backups and mirrors.", switch(store, "/zerobyte", || json!({ "interval": "5m" })))}
         <Show when=enabled>
             {row("Webhook token", view! { <span class="mono">{hook}</span> }, token_input(store, "/zerobyte/webhook_token".into(), true))}
             {row("API address", "Optional, for the mirror status.", text_input(store, "/zerobyte/url".into(), "http://zerobyte.example.com:4096", true))}
             {row("API key", "ZeroByte keys can also delete backups, keep this node private.", password_input(store, "/zerobyte/api_key".into()))}
-            {row("Poll interval", "", text_input(store, "/zerobyte/interval".into(), "5m", false))}
+            {row("Poll interval", "", span_input(store, "/zerobyte/interval".into(), false))}
         </Show>
-        {row("Alert after", "Alert when a backup or mirror fails or no success arrived for this long.", text_input(store, "/shared/backup_max_age".into(), "25h", false))}
+        {row("Alert after", "Alert when a backup or mirror fails or no success arrived for this long.", span_input(store, "/shared/backup_max_age".into(), false))}
     }
 }
 
 fn retention(store: Store) -> impl IntoView {
     view! {
-        <p class="lead">"Raw samples are averaged into 5 minute and hourly points before they expire. Durations take s, m, h and d."</p>
-        {row("Raw samples", "Every report, about 30 s apart.", text_input(store, "/shared/retention/raw".into(), "7d", false))}
-        {row("5 minute averages", "", text_input(store, "/shared/retention/medium".into(), "90d", false))}
-        {row("Hourly averages", "", text_input(store, "/shared/retention/long".into(), "730d", false))}
+        <p class="lead">"Every level keeps its data for the chosen time. Older reports are averaged into 5 minute and hourly points, so long time ranges stay small and fast."</p>
+        <div class="card plain">
+            <div class="card-grid">
+                {field("Every report", span_input(store, "/shared/retention/raw".into(), false))}
+                {field("5 minute averages", span_input(store, "/shared/retention/medium".into(), false))}
+                {field("Hourly averages", span_input(store, "/shared/retention/long".into(), false))}
+            </div>
+        </div>
     }
 }
 
@@ -885,7 +940,8 @@ pub fn SettingsPage() -> impl IntoView {
         Route::Settings(page) if PAGES.iter().any(|(id, _)| *id == page) => page,
         _ => "general".to_string(),
     });
-    let title = move || PAGES.iter().find(|(id, _)| *id == page.get()).map_or("", |(_, label)| *label);
+    let label = move |id: &str, fallback: &'static str| if id == "peer" { peer_label(store) } else { fallback };
+    let title = move || PAGES.iter().find(|(id, _)| *id == page.get()).map_or("", |(id, fallback)| label(id, fallback));
     let content = move || {
         if store.config.with(Option::is_none) {
             return view! { <p class="empty-note">"Loading the settings"</p> }.into_any();
@@ -911,9 +967,9 @@ pub fn SettingsPage() -> impl IntoView {
             <nav class="split-list narrow" aria-label="Settings sections">
                 {PAGES
                     .iter()
-                    .map(|(id, label)| {
+                    .map(|(id, fallback)| {
                         let current = move || (page.get() == *id).then_some("page");
-                        view! { <a class="cat" href=Route::Settings(id.to_string()).href() aria-current=current>{*label}</a> }
+                        view! { <a class="cat" href=Route::Settings(id.to_string()).href() aria-current=current>{move || label(id, fallback)}</a> }
                     })
                     .collect_view()}
             </nav>

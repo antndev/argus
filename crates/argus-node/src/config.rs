@@ -45,8 +45,6 @@ pub struct Config {
     pub database: String,
     #[serde(default = "enabled")]
     pub ui: bool,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub simulate: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peer: Option<Peer>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

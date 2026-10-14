@@ -33,7 +33,6 @@ pub fn App() -> impl IntoView {
     };
 
     store.check_session();
-    crate::simulation::install(store);
 
     view! {
         <Show when=move || !store.locked.get() fallback=|| view! { <Login/> }>
@@ -48,7 +47,6 @@ pub fn App() -> impl IntoView {
                 </main>
             </div>
         </Show>
-        <crate::simulation::SimulationPanel/>
         <Toast/>
     }
 }
@@ -309,15 +307,7 @@ fn Header() -> impl IntoView {
         <header class="screen-head">
             <h1>{title}</h1>
             <span class="screen-meta">{subtitle}</span>
-            <div class="grow"></div>
-            <crate::simulation::SimulationBadge/>
             <Show when=settings>{settings_actions()}</Show>
-            <Show when=move || !settings()>
-                <span class=move || if store.offline.get() { "live off" } else { "live" }>
-                    <i></i>
-                    {move || if store.offline.get() { "Offline" } else { "Live" }}
-                </span>
-            </Show>
             <Show when=charts>{segmented(store.range, Range::OPTIONS, "Time range")}</Show>
         </header>
     }

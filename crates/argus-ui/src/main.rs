@@ -6,7 +6,6 @@ mod format;
 mod icons;
 mod pages;
 mod route;
-mod simulation;
 mod store;
 mod theme;
 

@@ -14,19 +14,18 @@ fn threshold(spec: ChartSpec, value: Option<f64>, text: impl Fn(f64) -> String) 
     }
 }
 
-fn busiest_interface(host: &HostSummary) -> Option<(String, String)> {
-    let described = host.inventory.interfaces.iter().find(|i| i.description.as_deref().is_some_and(|d| d.eq_ignore_ascii_case("wan")));
-    if let Some(interface) = described {
-        return Some((interface.name.clone(), format!("WAN ({})", interface.name)));
-    }
-    host.latest
+fn interfaces(host: &HostSummary) -> Vec<(String, String)> {
+    let mut list: Vec<(String, String)> = host
+        .latest
         .iter()
         .filter(|m| m.group == "net" && m.field == "rx")
-        .max_by(|a, b| {
-            let total = |m: &argus_model::Metric| m.value + latest(host, "net", &m.item, "tx").unwrap_or_default();
-            total(a).total_cmp(&total(b))
+        .map(|m| {
+            let description = host.inventory.interfaces.iter().find(|i| i.name == m.item).and_then(|i| i.description.clone());
+            (m.item.clone(), description.map_or_else(|| m.item.clone(), |d| format!("{d} ({})", m.item)))
         })
-        .map(|m| (m.item.clone(), m.item.clone()))
+        .collect();
+    list.sort_by_key(|(_, label)| !label.to_ascii_uppercase().starts_with("WAN"));
+    list
 }
 
 fn chart_specs(host: &HostSummary) -> Vec<ChartSpec> {
@@ -68,13 +67,8 @@ fn chart_specs(host: &HostSummary) -> Vec<ChartSpec> {
         }
         specs.push(spec);
     }
-    if let Some((name, note)) = busiest_interface(host) {
-        specs.push(
-            ChartSpec::new(id, "Network", note, Unit::Rate)
-                .wide(specs.len() % 2 == 0)
-                .series("In", key("net", &name, "rx"))
-                .series("Out", key("net", &name, "tx")),
-        );
+    for (name, label) in interfaces(host) {
+        specs.push(ChartSpec::new(id, "Network", label, Unit::Rate).series("In", key("net", &name, "rx")).series("Out", key("net", &name, "tx")));
     }
     specs
 }
@@ -129,7 +123,10 @@ pub fn HostPage(host_id: String) -> impl IntoView {
     let specs = Memo::new(move |_| host.with(|h| h.as_ref().map(chart_specs).unwrap_or_default()));
     let id = host_id.clone();
     let state = move || host.with(|h| h.as_ref().map(|h| h.state).unwrap_or_default());
-    let seen = move || host.with(|h| h.as_ref().map(|h| format!("Last report {}", format::ago(h.last_seen as f64, store.clock.get()))).unwrap_or_default());
+    let seen = move || {
+        host.with(|h| h.as_ref().filter(|h| h.last_seen > 0).map(|h| format!("Last report {}", format::ago(h.last_seen as f64, store.clock.get()))))
+            .unwrap_or_default()
+    };
     let about = move || {
         host.with(|h| {
             h.as_ref()
@@ -208,8 +205,8 @@ pub fn HostPage(host_id: String) -> impl IntoView {
                 <span class="dim">{seen}</span>
             </div>
         </div>
-        <Show when=move || store.loaded() && host.with(Option::is_none)>
-            <p class="meta">"This host has not reported to this node."</p>
+        <Show when=move || store.loaded() && host.with(|h| h.as_ref().is_none_or(|h| h.last_seen == 0))>
+            <p class="empty-note">"No report yet. Install the agent on this host with its token from Settings, Hosts and agents, it shows up here within 30 seconds."</p>
         </Show>
         <section>
             <AlertList include_muted=true host=id.clone()/>

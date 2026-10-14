@@ -11,11 +11,14 @@ notifications, with no app store app and no relay service in between.
   Two nodes sync every 15 seconds and take over for each other.
 - **Dashboard**: Leptos and uPlot, built into the node binary. Installed on the home screen it is also the app that
   receives the notifications.
+- **ZeroByte integration**: Argus fully supports [ZeroByte](https://github.com/nicotsx/zerobyte) backups. It takes every
+  backup event from ZeroByte's webhooks, reads the S3 mirror status from the ZeroByte API and alerts when a backup or
+  mirror fails or is overdue.
 
 ## How it fits together
 
 ```
-agents ──HTTPS──▶ home node ◀──sync, started by home──▶ vps node ◀──HTTPS── agents
+agents ──HTTPS──▶ internal node ◀──sync, started by internal──▶ external node ◀──HTTPS── agents
                      │                                     │
                      └──▶ push service (Apple, Google) ◀───┘
                                      │
@@ -24,12 +27,12 @@ agents ──HTTPS──▶ home node ◀──sync, started by home──▶ vp
 ```
 
 - Every host belongs to one node (its `site`). That node evaluates the host's rules and sends its alerts.
-- Agents at home report to both nodes, so the vps node can take over when the home node is gone. After 60 seconds
+- Agents at home report to both nodes, so the external node can take over when the internal node is gone. After 60 seconds
   without sync each node takes over the hosts it still receives reports from. An alert that was already sent is
   never sent again.
 - The node that raises an alert encrypts it for each phone and hands it to the phone's push service directly. The
   text travels inside the encrypted message, so the phone never has to reach a node to read it.
-- Nothing ever connects into the home network: the home node starts every sync.
+- Nothing ever connects into the home network: the internal node starts every sync.
 
 ## Node
 
@@ -51,8 +54,8 @@ unconfigured node later. The node keeps only the argon2 hash, in its database. C
 If it is lost, run `argus-node reset-password` on the server (in Docker:
 `docker exec argus-node /argus-node reset-password --config /data/argus.json`) and set a new one within 15 minutes.
 
-A naming suggestion for two nodes: `argus.internal.example.com` for the home node with the dashboard, reachable only
-inside your network, and `argus.external.example.com` for the public node.
+A naming suggestion for two nodes: `argus.internal.example.com` for the internal node with the dashboard, reachable
+only inside your network, and `argus.external.example.com` for the external node that is reachable from the internet.
 
 `crates/argus-node/node.example.json` shows every option. The important parts:
 
@@ -167,7 +170,9 @@ that is reachable from outside. Settings, Notifications shows which messages wer
 set, the node sends a short all clear at that interval so a broken path shows up within a day. A phone that ends its
 subscription is removed automatically and logged.
 
-## ZeroByte
+## ZeroByte integration
+
+Argus has a full ZeroByte integration, configured under Settings, ZeroByte integration or in the `zerobyte` block:
 
 - **Webhook**: in ZeroByte add a notification destination of type Generic Webhook with method POST, JSON enabled and
   the keys `title` and `message`, URL `https://<node>/api/v1/hooks/zerobyte/<webhook_token>`. Enable start, success,
@@ -189,10 +194,6 @@ cargo test --workspace --exclude argus-ui
 rustup target add wasm32-unknown-unknown && cargo install trunk --locked
 trunk serve            # dashboard on :8080, proxies /api to a node on :8090
 ```
-
-To try alert paths without breaking anything, set `"simulate": true` (Settings, General, Fault simulation). The
-dashboard then fakes problems on real hosts with keyboard shortcuts, press `?` for the list. Rules, alerts and
-notifications react as if the problem were real.
 
 ## License
 

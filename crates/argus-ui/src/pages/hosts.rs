@@ -40,6 +40,9 @@ pub fn HostsPage() -> impl IntoView {
             host.with(|h| {
                 h.as_ref()
                     .map(|h| {
+                        if h.last_seen == 0 {
+                            return "Waiting for the first report".to_string();
+                        }
                         let role = if h.info.role.is_empty() { format::capitalize(&h.info.os) } else { h.info.role.clone() };
                         match h.state {
                             Severity::Critical => format!("{role}, needs attention"),

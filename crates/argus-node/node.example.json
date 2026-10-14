@@ -1,10 +1,10 @@
 {
-  "name": "home",
+  "name": "internal",
   "listen": "0.0.0.0:8090",
   "database": "argus.db",
   "ui": true,
   "peer": {
-    "name": "vps",
+    "name": "external",
     "url": "https://argus.external.example.com",
     "token": "shared sync secret, the same on both nodes"
   },

@@ -258,13 +258,6 @@ pub fn evaluate(app: &App, now: i64) {
         hosts_in_scope.insert(BACKUP_HOST.to_string());
         conditions.extend(backup_conditions(app, now, schedules));
     }
-    if config.simulate && owns_backups {
-        hosts_in_scope.insert(BACKUP_HOST.to_string());
-        if app.simulated(crate::simulate::NODE, "backup") {
-            let detail = "Simulated failure from the dashboard".to_string();
-            conditions.push(Condition::new(BACKUP_HOST, "backup", "Simulated", Severity::Critical, "Backup Simulated failed".to_string(), detail));
-        }
-    }
     reconcile(app, now, conditions, &hosts_in_scope, &keys_in_scope);
 }
 
