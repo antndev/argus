@@ -227,7 +227,7 @@ pub fn HostPage(host_id: String) -> impl IntoView {
         </div>
         <Show when=move || !checks().is_empty()>
             <section>
-                <div class="sec-head"><h2>"Checks"</h2><span class="meta">"Run by this agent"</span></div>
+                <div class="sec-head"><h2>"Checks"</h2></div>
                 <div class="tbl-wrap stack">
                     <table>
                         <thead><tr><th>"Status"</th><th>"Check"</th><th>"Type"</th><th>"Result"</th><th class="num">"Latency"</th></tr></thead>
@@ -248,7 +248,7 @@ pub fn HostPage(host_id: String) -> impl IntoView {
         </Show>
         <Show when=move || !containers().is_empty()>
             <section>
-                <div class="sec-head"><h2>"Containers"</h2><span class="meta">"Docker through a read-only socket proxy"</span></div>
+                <div class="sec-head"><h2>"Containers"</h2></div>
                 <div class="tbl-wrap">
                     <table>
                         <thead>

@@ -383,17 +383,13 @@ fn group(title: &'static str) -> impl IntoView {
 }
 
 fn general(store: Store) -> impl IntoView {
-    let path = move || store.saved.with(|s| s.as_ref().and_then(|s| s.path.clone())).unwrap_or_else(|| "not saved to a file".to_string());
-    let revision = move || {
-        let revision = read(store, "/shared/revision").and_then(|v| v.as_i64()).unwrap_or(0);
-        if revision == 0 { "Never changed".to_string() } else { format!("Changed {}", format::ago(revision as f64, store.clock.get())) }
-    };
+    let path = move || store.saved.with(|s| s.as_ref().and_then(|s| s.path.clone())).unwrap_or_else(|| "Not saved to a file".to_string());
     view! {
-        {row("Node name", "Hosts whose agents report this name as their site belong to this node. Both nodes need different names.", text_input(store, "/name".into(), "home", false))}
-        {row("Listen address", "Address and port of the web server. Takes effect after a restart.", text_input(store, "/listen".into(), "0.0.0.0:8090", false))}
-        {row("Database", "SQLite file, relative to the config file. Takes effect after a restart.", text_input(store, "/database".into(), "argus.db", false))}
-        {row("Config file", "Edit this file or this page, both stay in sync. Changes to the file apply within seconds.", view! { <span class="mono value">{path}</span> })}
-        {row("Shared settings", "Hosts, checks, alert rules, phone notifications, backup age and retention are the same on both nodes. The newer change wins.", view! { <span class="value">{revision}</span> })}
+        <p class="lead">"Changes save on their own. The config file stays in sync, edits there apply within seconds."</p>
+        {row("Node name", "Agents name it as their site. Each node needs its own name.", text_input(store, "/name".into(), "internal", false))}
+        {row("Listen address", "Takes effect after a restart.", text_input(store, "/listen".into(), "0.0.0.0:8090", false))}
+        {row("Database", "Takes effect after a restart.", text_input(store, "/database".into(), "argus.db", false))}
+        {row("Config file", "", view! { <span class="mono value">{path}</span> })}
     }
 }
 
@@ -651,7 +647,7 @@ fn this_device(store: Store) -> impl IntoView {
     let enable = move |_| {
         let key = saved(store, "/shared/push/public_key").and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
         if store.dirty() || key.is_empty() {
-            store.notify("Save the settings first");
+            store.notify("The settings are still saving, try again in a moment");
             return;
         }
         busy.set(true);
@@ -770,7 +766,9 @@ fn notifications(store: Store) -> impl IntoView {
             <Show when=move || devices.get() == 0>
                 <p class="empty-note">"No device yet."</p>
             </Show>
-            {row("Test", "Sends a test message to every saved device.", view! { <button class="btn" type="button" on:click=test>"Send test notification"</button> })}
+            <div class="add-row">
+                <button class="btn" type="button" on:click=test>"Send test notification"</button>
+            </div>
             {group("Recent notifications")}
             <ul class="entries">{history}</ul>
             <Show when=move || recent.with(Vec::is_empty)>
@@ -789,12 +787,29 @@ fn peer_label(store: Store) -> &'static str {
 
 fn peer(store: Store) -> impl IntoView {
     let enabled = move || read(store, "/peer").is_some();
+    let internal = move || read(store, "/peer/url").is_some();
+    let role = move |ev| {
+        let to_internal = event_target_value(&ev) == "internal";
+        let address = saved(store, "/peer/url").filter(|_| to_internal).unwrap_or_else(|| json!(""));
+        write(store, "/peer/url", to_internal.then_some(address));
+        if matches!(text(store, "/peer/name").as_str(), "" | "internal" | "external") {
+            write(store, "/peer/name", Some(json!(if to_internal { "external" } else { "internal" })));
+        }
+    };
     view! {
-        <p class="lead">"Two nodes watch each other. The internal node starts every sync, so the external node never has to reach into your network. After 60 s without sync each node takes over the hosts it still hears from."</p>
-        {row("Paired node", "Turn off for a single node setup.", switch(store, "/peer", || json!({ "name": "external", "token": "" })))}
+        <p class="lead">"Two nodes watch each other. The internal node starts every sync, so nothing ever connects into your network. After 60 s without sync each node takes over the hosts it still hears from."</p>
+        {row("Two nodes", "Turn off to run a single node.", switch(store, "/peer", || json!({ "name": "external", "url": "", "token": "" })))}
         <Show when=enabled>
-            {row("Name", "The other node's name.", text_input(store, "/peer/name".into(), "external", false))}
-            {row("Address", "The external node's address, set on the internal node. Leave it empty on the external node.", text_input(store, "/peer/url".into(), "https://argus.external.example.com", true))}
+            {row("This node", "The internal node runs at home, the external one is reachable from the internet.", view! {
+                <select class="input" prop:value=move || if internal() { "internal" } else { "external" } on:change=role>
+                    <option value="internal">"Internal"</option>
+                    <option value="external">"External"</option>
+                </select>
+            })}
+            {row("Other node's name", "Its node name under General.", text_input(store, "/peer/name".into(), "external", false))}
+            <Show when=internal>
+                {row("Address", "Where this node reaches the external node.", text_input(store, "/peer/url".into(), "https://argus.external.example.com", false))}
+            </Show>
             {row("Sync token", "The same secret on both nodes, at least 16 characters.", token_input(store, "/peer/token".into(), false))}
         </Show>
     }
@@ -808,26 +823,53 @@ fn backups(store: Store) -> impl IntoView {
         token => format!("{}/api/v1/hooks/zerobyte/{token}", origin()),
     };
     view! {
-        <p class="lead">"Argus watches ZeroByte backups. ZeroByte reports every backup run to Argus by webhook. S3 mirrors only report failures, so Argus can also read the last mirror sync from the ZeroByte API."</p>
-        {row("ZeroByte integration", "Watch backups and mirrors.", switch(store, "/zerobyte", || json!({ "interval": "5m" })))}
+        <p class="lead">"ZeroByte tells Argus about every backup run. Add a Generic Webhook destination in ZeroByte with the address below, then every start, success, warning and failure arrives here within seconds. S3 mirrors only report failures that way, so Argus can also ask the ZeroByte API every few minutes for the last run of each schedule and mirror. Argus only reads, it never starts or changes a backup."</p>
+        {row("ZeroByte integration", "Show backups and alert on problems.", switch(store, "/zerobyte", || json!({ "interval": "5m" })))}
         <Show when=enabled>
+            {group("Webhook")}
             {row("Webhook token", view! { <span class="mono">{hook}</span> }, token_input(store, "/zerobyte/webhook_token".into(), true))}
-            {row("API address", "Optional, for the mirror status.", text_input(store, "/zerobyte/url".into(), "http://zerobyte.example.com:4096", true))}
+            {group("API, optional")}
+            {row("API address", "Needed for the mirror status.", text_input(store, "/zerobyte/url".into(), "http://zerobyte.example.com:4096", true))}
             {row("API key", "ZeroByte keys can also delete backups, keep this node private.", password_input(store, "/zerobyte/api_key".into()))}
-            {row("Poll interval", "", span_input(store, "/zerobyte/interval".into(), false))}
+            {row("Ask every", "", span_input(store, "/zerobyte/interval".into(), false))}
         </Show>
         {row("Alert after", "Alert when a backup or mirror fails or no success arrived for this long.", span_input(store, "/shared/backup_max_age".into(), false))}
     }
 }
 
+fn keep(store: Store, label: &'static str, sub: &'static str, level: &'static str) -> impl IntoView {
+    let path = format!("/shared/retention/{level}");
+    let shown = path.clone();
+    let days = move || argus_model::parse_duration(&text(store, &shown)).map(|d| (d.as_secs() / 86_400).to_string()).unwrap_or_default();
+    view! {
+        <label class="field">
+            <span>{label}</span>
+            <input
+                class="input"
+                type="number"
+                min="1"
+                inputmode="numeric"
+                prop:value=days
+                on:input=move |ev| {
+                    if let Ok(days) = event_target_value(&ev).trim().parse::<u32>() {
+                        write(store, &path, Some(json!(format!("{days}d"))));
+                    }
+                }
+            />
+            <small class="field-sub">{sub}</small>
+        </label>
+    }
+}
+
 fn retention(store: Store) -> impl IntoView {
     view! {
-        <p class="lead">"Every level keeps its data for the chosen time. Older reports are averaged into 5 minute and hourly points, so long time ranges stay small and fast."</p>
+        <p class="lead">"Older data is averaged into coarser points, so long time ranges stay small and fast. Each level keeps its points for the given number of days."</p>
         <div class="card plain">
             <div class="card-grid">
-                {field("Every report", span_input(store, "/shared/retention/raw".into(), false))}
-                {field("5 minute averages", span_input(store, "/shared/retention/medium".into(), false))}
-                {field("Hourly averages", span_input(store, "/shared/retention/long".into(), false))}
+                {keep(store, "Keep every report", "Days with full detail.", "raw")}
+                {keep(store, "Keep 5 minute averages", "Days of 5 minute points.", "medium")}
+                {keep(store, "Keep hourly averages", "Days of hourly points.", "long")}
+                {keep(store, "Keep daily averages", "Days of daily points.", "daily")}
             </div>
         </div>
     }
@@ -887,13 +929,13 @@ fn json_editor(store: Store) -> impl IntoView {
         Ok(value) if value.is_object() => {
             store.config.set(Some(value));
             error.set(String::new());
-            store.notify("Applied, save to keep it");
+            store.notify("Applied");
         }
         Ok(_) => error.set("The configuration must be a JSON object".to_string()),
         Err(problem) => error.set(problem.to_string()),
     };
     view! {
-        <p class="lead">"The whole configuration as stored in the file. Secrets show as ******** and keep their stored value. Apply, then save."</p>
+        <p class="lead">"The whole configuration as stored in the file. Secrets show as ******** and keep their stored value."</p>
         <textarea class="input code-edit" spellcheck="false" prop:value=move || draft.get() on:input=move |ev| draft.set(event_target_value(&ev))></textarea>
         <p class="form-error" role="alert">{move || error.get()}</p>
         <div class="add-row">
@@ -908,25 +950,8 @@ fn about(store: Store) -> impl IntoView {
     view! {
         {row("Version", "", view! { <span class="value">{env!("CARGO_PKG_VERSION")}</span> })}
         {row("Node", "", view! { <span class="value">{node}</span> })}
-        {row("Source", "PolyForm Noncommercial 1.0.0", view! { <a class="link" href="https://github.com/antndev/argus" target="_blank" rel="noreferrer">"github.com/antndev/argus"</a> })}
-    }
-}
-
-pub fn settings_meta(store: Store) -> String {
-    if store.dirty() {
-        return "Unsaved changes".to_string();
-    }
-    store.saved.with(|s| s.as_ref().and_then(|s| s.path.clone())).map(|p| format!("Saved to {p}")).unwrap_or_default()
-}
-
-pub fn settings_actions() -> impl IntoView {
-    let store = use_store();
-    let idle = move || !store.dirty() || store.saving.get();
-    view! {
-        <button class="btn" type="button" disabled=idle on:click=move |_| store.discard()>"Discard"</button>
-        <button class="btn primary" type="button" disabled=idle on:click=move |_| store.save_config()>
-            {move || if store.saving.get() { "Saving" } else { "Save" }}
-        </button>
+        {row("License", "", view! { <span class="value">"PolyForm Noncommercial 1.0.0"</span> })}
+        {row("Source", "", view! { <a class="value link" href="https://github.com/antndev/argus" target="_blank" rel="noreferrer">"github.com/antndev/argus"</a> })}
     }
 }
 
@@ -978,6 +1003,7 @@ pub fn SettingsPage() -> impl IntoView {
                 <div class="settings">
                     <a class="back" href="#/settings"><span class="ico" inner_html=crate::icons::BACK></span>"Settings"</a>
                     <h2>{title}</h2>
+                    {move || store.save_error.get().map(|error| view! { <p class="save-error" role="alert">{format!("Not saved, {error}")}</p> })}
                     {move || {
                         let _ = (loaded.get(), page.get());
                         untrack(content)

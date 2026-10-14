@@ -243,6 +243,7 @@ pub struct SyncPayload {
     pub backups: Vec<BackupSchedule>,
     pub cursor: i64,
     pub config: Option<serde_json::Value>,
+    pub history_cleared: i64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

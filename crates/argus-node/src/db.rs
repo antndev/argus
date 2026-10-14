@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS series (id INTEGER PRIMARY KEY, host TEXT NOT NULL, k
 CREATE TABLE IF NOT EXISTS samples (series INTEGER NOT NULL, time INTEGER NOT NULL, value REAL NOT NULL, PRIMARY KEY (series, time)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS samples_5m (series INTEGER NOT NULL, time INTEGER NOT NULL, value REAL NOT NULL, PRIMARY KEY (series, time)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS samples_1h (series INTEGER NOT NULL, time INTEGER NOT NULL, value REAL NOT NULL, PRIMARY KEY (series, time)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS samples_1d (series INTEGER NOT NULL, time INTEGER NOT NULL, value REAL NOT NULL, PRIMARY KEY (series, time)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS hosts (id TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS alerts (key TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, time INTEGER NOT NULL, data TEXT NOT NULL);
@@ -30,7 +31,8 @@ CREATE INDEX IF NOT EXISTS events_time ON events (time);
 CREATE INDEX IF NOT EXISTS messages_time ON messages (time);
 ";
 
-const TIERS: [(&str, i64); 3] = [("samples", 0), ("samples_5m", 5 * MINUTE), ("samples_1h", HOUR)];
+const TIERS: [(&str, i64); 4] = [("samples", 0), ("samples_5m", 5 * MINUTE), ("samples_1h", HOUR), ("samples_1d", DAY)];
+const CLEARED: &str = "history_cleared";
 
 pub fn open(path: &str) -> rusqlite::Result<Db> {
     let db = Connection::open(path)?;
@@ -106,8 +108,10 @@ pub fn query_series(db: &Db, host: &str, keys: &[String], from: i64, to: i64, re
         TIERS[0]
     } else if from >= to - retention.medium.0 {
         TIERS[1]
-    } else {
+    } else if from >= to - retention.long.0 {
         TIERS[2]
+    } else {
+        TIERS[3]
     };
     let step = (span / 360).max(resolution).max(30_000);
     let start = from / step * step;
@@ -150,7 +154,7 @@ pub fn compact(db: &mut Db, now: i64, retention: &Retention) -> rusqlite::Result
         }
         tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)", params![mark, until])?;
     }
-    for ((table, _), keep) in TIERS.iter().zip([retention.raw.0, retention.medium.0, retention.long.0]) {
+    for ((table, _), keep) in TIERS.iter().zip([retention.raw.0, retention.medium.0, retention.long.0, retention.daily.0]) {
         let mut statement = tx.prepare(&format!("DELETE FROM {table} WHERE series = ?1 AND time < ?2"))?;
         for id in &ids {
             statement.execute(params![id, now - keep])?;
@@ -205,7 +209,23 @@ pub fn events(db: &Db, limit: usize) -> Vec<Event> {
 }
 
 pub fn save_event(db: &Db, event: &Event) -> rusqlite::Result<()> {
+    if event.time <= history_cleared(db) {
+        return Ok(());
+    }
     db.prepare_cached("INSERT OR IGNORE INTO events (id, time, data) VALUES (?1, ?2, ?3)")?.execute(params![event.id, event.time, json(event)])?;
+    Ok(())
+}
+
+pub fn history_cleared(db: &Db) -> i64 {
+    meta(db, CLEARED)
+}
+
+pub fn clear_history(db: &Db, until: i64) -> rusqlite::Result<()> {
+    if until <= history_cleared(db) {
+        return Ok(());
+    }
+    set_meta(db, CLEARED, until)?;
+    db.execute("DELETE FROM events WHERE time <= ?1", [until])?;
     Ok(())
 }
 
@@ -305,7 +325,7 @@ mod tests {
     use crate::config::Span;
 
     fn retention() -> Retention {
-        Retention { raw: Span(7 * DAY), medium: Span(90 * DAY), long: Span(730 * DAY) }
+        Retention { raw: Span(7 * DAY), medium: Span(90 * DAY), long: Span(730 * DAY), daily: Span(3650 * DAY) }
     }
 
     fn sample(time: i64, value: f64) -> Sample {
@@ -329,6 +349,19 @@ mod tests {
         let raw: i64 = db.query_row("SELECT count(*) FROM samples", [], |r| r.get(0)).expect("count");
         assert_eq!(raw, 0);
         assert_eq!(samples_since(&db, &["h".into()], 0, 10).len(), 0);
+    }
+
+    #[test]
+    fn cleared_history_stays_cleared() {
+        let db = open(":memory:").expect("db");
+        let event = |id: &str, time: i64| Event { id: id.into(), time, ..Default::default() };
+        save_event(&db, &event("a", 10)).expect("save");
+        clear_history(&db, 20).expect("clear");
+        clear_history(&db, 5).expect("older clear");
+        save_event(&db, &event("b", 15)).expect("save");
+        save_event(&db, &event("c", 30)).expect("save");
+        assert_eq!(events(&db, 10).into_iter().map(|e| e.id).collect::<Vec<_>>(), ["c"]);
+        assert_eq!(history_cleared(&db), 20);
     }
 
     #[test]

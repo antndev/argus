@@ -20,7 +20,7 @@ fn hashed(path: &str) -> bool {
 
 pub async fn serve(State(app): State<Arc<App>>, method: Method, uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
-    if !app.config().ui || method != Method::GET || path.starts_with("api/") {
+    if !app.config().ui || !matches!(method, Method::GET | Method::HEAD) || path.starts_with("api/") {
         return StatusCode::NOT_FOUND.into_response();
     }
     let (path, file) = match Assets::get(path).filter(|_| !path.is_empty()) {

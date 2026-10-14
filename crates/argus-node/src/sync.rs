@@ -45,6 +45,7 @@ fn build(app: &App, now: i64, cursor: i64, with_samples: bool) -> SyncPayload {
         hosts,
         backups: db::backups(&db),
         config: serde_json::to_value(&config.shared).ok(),
+        history_cleared: db::history_cleared(&db),
     }
 }
 
@@ -88,6 +89,7 @@ pub fn merge(app: &App, payload: SyncPayload, initiator: bool) {
         for (id, at) in &payload.receipts {
             let _ = db::mark_delivered(&db, id, *at);
         }
+        let _ = db::clear_history(&db, payload.history_cleared);
         for event in &payload.events {
             let _ = db::save_event(&db, event);
         }

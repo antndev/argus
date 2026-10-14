@@ -26,6 +26,17 @@ pub fn AlertsPage() -> impl IntoView {
         }
     });
 
+    let clear = move |_| {
+        if !window().confirm_with_message("Clear the alert history on both nodes?").unwrap_or(false) {
+            return;
+        }
+        spawn_local(async move {
+            match api::send("/api/v1/events/clear", &serde_json::json!({})).await {
+                Ok(()) => store.events.set(Vec::new()),
+                Err(failure) => store.notify(format!("Not cleared, {failure}")),
+            }
+        });
+    };
     let history_item = move |event: Event| {
         let note = if event.note.is_empty() { String::new() } else { format!(", {}", event.note) };
         let meta = format!("{}, {}, {}{note}", format::day_label(event.time as f64, js_sys::Date::now()), format::hhmm(event.time as f64), event.kind);
@@ -44,14 +55,15 @@ pub fn AlertsPage() -> impl IntoView {
         <section>
             <div class="sec-head">
                 <h2>"Active"</h2>
-                <span class="meta">"One notification per change, sent to your phone"</span>
             </div>
             <AlertList/>
         </section>
         <section>
             <div class="sec-head">
                 <h2>"History"</h2>
-                <span class="meta">"Latest 100 changes"</span>
+                <Show when=move || !store.events.with(Vec::is_empty)>
+                    <button class="link" type="button" on:click=clear>"Clear"</button>
+                </Show>
             </div>
             <Show when=move || store.events.with(Vec::is_empty)>
                 <p class="meta">"Nothing happened yet."</p>

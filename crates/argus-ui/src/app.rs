@@ -9,7 +9,7 @@ use crate::api;
 use crate::components::Toast;
 use crate::format;
 use crate::icons;
-use crate::pages::{AlertsPage, ChecksPage, HostsPage, OverviewPage, SettingsPage, settings_actions, settings_meta};
+use crate::pages::{AlertsPage, ChecksPage, HostsPage, OverviewPage, SettingsPage};
 use crate::route::Route;
 use crate::store::{Store, use_store};
 
@@ -19,6 +19,13 @@ pub fn App() -> impl IntoView {
     provide_context(store);
     store.refresh();
     Effect::new(move |_| store.theme.get().apply());
+    Effect::new(move |_| {
+        if store.dirty() {
+            store.schedule_save();
+        } else if store.save_error.with_untracked(Option::is_some) {
+            store.save_error.set(None);
+        }
+    });
     set_interval(move || store.clock.set(js_sys::Date::now()), Duration::from_secs(1));
     set_interval(move || store.refresh(), Duration::from_secs(5));
     let _ = window_event_listener(leptos::ev::hashchange, move |_| store.route.set(Route::current()));
@@ -39,7 +46,6 @@ pub fn App() -> impl IntoView {
             <div class="app">
                 <Sidebar/>
                 <main class="main">
-                    <Header/>
                     <Show when=move || store.offline.get()>
                         <div class="offline" role="alert">"Cannot reach the node. Showing the last known state."</div>
                     </Show>
@@ -247,21 +253,8 @@ fn Sidebar() -> impl IntoView {
                     (active > 0).then(|| (active.to_string(), true))
                 })}
                 <div class="nodes">{nodes}</div>
-                {nav_item("settings", "Settings", "#/settings", icons::SETTINGS, move || store.dirty().then(|| ("Unsaved".to_string(), true)))}
+                {nav_item("settings", "Settings", "#/settings", icons::SETTINGS, move || store.save_error.with(Option::is_some).then(|| ("Not saved".to_string(), true)))}
             </nav>
         </aside>
-    }
-}
-
-#[component]
-fn Header() -> impl IntoView {
-    let store = use_store();
-    view! {
-        <Show when=move || matches!(store.route.get(), Route::Settings(_))>
-            <header class="screen-head">
-                <span class="screen-meta">{move || settings_meta(store)}</span>
-                {settings_actions()}
-            </header>
-        </Show>
     }
 }

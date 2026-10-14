@@ -10,4 +10,4 @@ pub use checks::ChecksPage;
 pub use host::HostPage;
 pub use hosts::HostsPage;
 pub use overview::OverviewPage;
-pub use settings::{SettingsPage, settings_actions, settings_meta};
+pub use settings::SettingsPage;

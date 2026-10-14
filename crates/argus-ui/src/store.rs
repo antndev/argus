@@ -15,11 +15,20 @@ pub enum Range {
     Day,
     Week,
     Month,
+    Quarter,
+    Year,
 }
 
 impl Range {
-    pub const OPTIONS: &'static [(Range, &'static str)] =
-        &[(Range::Hour, "1h"), (Range::SixHours, "6h"), (Range::Day, "24h"), (Range::Week, "7d"), (Range::Month, "30d")];
+    pub const OPTIONS: &'static [(Range, &'static str)] = &[
+        (Range::Hour, "1h"),
+        (Range::SixHours, "6h"),
+        (Range::Day, "24h"),
+        (Range::Week, "7d"),
+        (Range::Month, "30d"),
+        (Range::Quarter, "90d"),
+        (Range::Year, "1y"),
+    ];
 
     pub fn seconds(self) -> i64 {
         match self {
@@ -28,6 +37,8 @@ impl Range {
             Self::Day => 86_400,
             Self::Week => 7 * 86_400,
             Self::Month => 30 * 86_400,
+            Self::Quarter => 90 * 86_400,
+            Self::Year => 365 * 86_400,
         }
     }
 }
@@ -58,6 +69,8 @@ pub struct Store {
     pub config: RwSignal<Option<serde_json::Value>>,
     pub saved: RwSignal<Option<ConfigView>>,
     pub saving: RwSignal<bool>,
+    pub save_error: RwSignal<Option<String>>,
+    saves: StoredValue<u64>,
     pub dragging: RwSignal<Option<String>>,
     toasts: StoredValue<u64>,
 }
@@ -87,6 +100,8 @@ impl Store {
             config: RwSignal::new(None),
             saved: RwSignal::new(None),
             saving: RwSignal::new(false),
+            save_error: RwSignal::new(None),
+            saves: StoredValue::new(0),
             dragging: RwSignal::new(None),
             toasts: StoredValue::new(0),
         }
@@ -149,26 +164,51 @@ impl Store {
         self.config.with(|c| c.is_some() && *c != saved)
     }
 
-    pub fn discard(&self) {
-        self.config.set(self.saved.with_untracked(|s| s.as_ref().map(|s| s.config.clone())));
+    pub fn schedule_save(&self) {
+        let store = *self;
+        let ticket = self.saves.get_value() + 1;
+        self.saves.set_value(ticket);
+        set_timeout(
+            move || {
+                if store.saves.get_value() != ticket || !store.dirty() {
+                    return;
+                }
+                if store.saving.get_untracked() || typing() {
+                    store.schedule_save();
+                } else {
+                    store.save_config();
+                }
+            },
+            Duration::from_millis(700),
+        );
     }
 
-    pub fn save_config(&self) {
+    fn save_config(&self) {
         let store = *self;
         let (Some(config), Some(version)) = (self.config.get_untracked(), self.saved.with_untracked(|s| s.as_ref().map(|s| s.version.clone()))) else {
             return;
         };
         self.saving.set(true);
         spawn_local(async move {
-            match api::put::<_, ConfigView>("/api/v1/config", &serde_json::json!({ "version": version, "config": config })).await {
+            match api::put::<_, ConfigView>("/api/v1/config", &serde_json::json!({ "version": version, "config": config.clone() })).await {
                 Ok(view) => {
-                    store.notify(if view.restart { "Saved, restart the node to use the new address or database" } else { "Saved and applied" });
-                    store.config.set(Some(view.config.clone()));
+                    if view.restart {
+                        store.notify("Saved, restart the node to use the new address or database");
+                    }
+                    if store.config.with_untracked(|c| c.as_ref() == Some(&config)) {
+                        store.config.set(Some(view.config.clone()));
+                    }
                     store.saved.set(Some(view));
+                    store.save_error.set(None);
                     store.refresh();
                 }
                 Err(failure) if failure.status == 401 => store.locked.set(true),
-                Err(failure) => store.notify(format!("Not saved, {failure}")),
+                Err(failure) if failure.status == 409 => {
+                    store.notify("The settings changed elsewhere and were reloaded");
+                    store.save_error.set(None);
+                    store.load_config();
+                }
+                Err(failure) => store.save_error.set(Some(failure.to_string())),
             }
             store.saving.set(false);
         });
@@ -281,4 +321,12 @@ pub fn key(group: &str, item: &str, field: &str) -> String {
 
 pub fn use_store() -> Store {
     expect_context::<Store>()
+}
+
+fn typing() -> bool {
+    document().active_element().is_some_and(|element| match element.tag_name().as_str() {
+        "TEXTAREA" => true,
+        "INPUT" => !matches!(element.get_attribute("type").as_deref(), Some("checkbox" | "radio" | "button" | "submit" | "range")),
+        _ => false,
+    })
 }

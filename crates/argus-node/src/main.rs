@@ -278,6 +278,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/v1/overview", get(api::overview))
         .route("/api/v1/series", get(api::series))
         .route("/api/v1/events", get(api::events))
+        .route("/api/v1/events/clear", post(api::clear_history))
         .route("/api/v1/rules", get(api::rules))
         .route("/api/v1/config", get(api::get_config))
         .route("/api/v1/config", put(api::put_config))

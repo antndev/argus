@@ -13,7 +13,7 @@ checks = true              # run the http, tcp and ping checks this node hands o
 
 [collectors]
 docker = "http://socket-proxy:2375"                  # optional, Docker API through a read-only socket proxy
-systemd = true                                       # failed units through the system D-Bus
+systemd = false                                      # failed units through the system D-Bus, native binary only (AppArmor blocks it in Docker)
 smart = ["/dev/nvme0"]                               # NVMe devices for SMART health
 filesystems = []                                     # optional allow list of mount points, empty means all
 ignore_interfaces = ["lo", "veth", "docker", "br-"]  # name prefixes

@@ -118,9 +118,10 @@ services:
       - ./agent.toml:/etc/argus/agent.toml:ro
 
   socket-proxy:
-    image: tecnativa/docker-socket-proxy:0.3.0
+    image: tecnativa/docker-socket-proxy:v0.5.0
     environment:
       CONTAINERS: 1
+      LOG_LEVEL: warning
     ports: ["127.0.0.1:2375:2375"]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -129,6 +130,10 @@ services:
 Set `root = "/host"` and, because the agent uses the host network, `docker = "http://127.0.0.1:2375"` in the agent
 config. `rslave` makes filesystems mounted after the container started (a late RAID, a remount after maintenance)
 visible to the agent; Docker Desktop does not support it, drop it there. For NVMe SMART add `devices: ["/dev/nvme0"]` and `cap_add: [SYS_ADMIN]`.
+`LOG_LEVEL: warning` keeps the proxy from logging every request the agent makes.
+
+Leave `systemd` off in a container. The collector asks the host's D-Bus for failed units, and the default AppArmor
+profile of Docker on Ubuntu blocks that connection. The native binary on a Linux host can use it.
 
 ### FreeBSD and OPNsense
 

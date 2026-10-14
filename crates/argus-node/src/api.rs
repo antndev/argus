@@ -136,6 +136,13 @@ pub struct EventsQuery {
     limit: Option<usize>,
 }
 
+pub async fn clear_history(State(app): State<Arc<App>>) -> StatusCode {
+    match db::clear_history(&app.db(), now_ms()) {
+        Ok(()) => StatusCode::NO_CONTENT,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
 pub async fn events(State(app): State<Arc<App>>, Query(query): Query<EventsQuery>) -> Json<Vec<Event>> {
     Json(db::events(&app.db(), query.limit.unwrap_or(100).min(1_000)))
 }

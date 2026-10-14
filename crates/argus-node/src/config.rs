@@ -104,11 +104,13 @@ pub struct Retention {
     pub medium: Span,
     #[serde(default = "long_retention")]
     pub long: Span,
+    #[serde(default = "daily_retention")]
+    pub daily: Span,
 }
 
 impl Default for Retention {
     fn default() -> Self {
-        Self { raw: raw_retention(), medium: medium_retention(), long: long_retention() }
+        Self { raw: raw_retention(), medium: medium_retention(), long: long_retention(), daily: daily_retention() }
     }
 }
 
@@ -329,8 +331,8 @@ impl Config {
             }
         }
         let retention = &shared.retention;
-        if retention.raw.0 < HOUR || retention.medium.0 < retention.raw.0 || retention.long.0 < retention.medium.0 {
-            return Err("retention needs raw of at least 1 h and raw ≤ medium ≤ long".into());
+        if retention.raw.0 < HOUR || retention.medium.0 < retention.raw.0 || retention.long.0 < retention.medium.0 || retention.daily.0 < retention.long.0 {
+            return Err("retention needs every report for at least 1 h, and each level at least as long as the one before".into());
         }
         if shared.backup_max_age.0 < HOUR {
             return Err("the backup age limit needs at least 1 h".into());
@@ -428,6 +430,10 @@ fn medium_retention() -> Span {
 
 fn long_retention() -> Span {
     Span(730 * DAY)
+}
+
+fn daily_retention() -> Span {
+    Span(3650 * DAY)
 }
 
 fn backup_age() -> Span {

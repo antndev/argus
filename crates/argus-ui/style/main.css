@@ -421,28 +421,6 @@ h3 {
   flex-direction: column;
 }
 
-.screen-head {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  min-height: 56px;
-  flex: none;
-  padding: 12px 18px 12px 28px;
-  border-bottom: 1px solid var(--line);
-}
-
-
-.screen-meta {
-  flex: 1 1 0;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-2);
-}
-
-
 .body {
   flex: 1;
   min-height: 0;
@@ -2151,6 +2129,40 @@ ol.sheet {
   height: 20px;
 }
 
+.row:has(> .ctl > .value:only-child) {
+  align-items: baseline;
+}
+
+.card.plain .card-grid {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px 16px;
+}
+
+.ctl > .ctl-row {
+  flex: 1;
+  min-width: 0;
+}
+
+.ctl-row > .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.field-sub {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.save-error {
+  margin: -2px 0 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--err) 30%, transparent);
+  background: var(--err-tint);
+  color: var(--err);
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 820px) {
   html,
   body {
@@ -2238,13 +2250,8 @@ ol.sheet {
     font-size: 0;
   }
 
-  .screen-head {
-    min-height: 52px;
-    padding: 8px 16px;
-  }
-
   .body {
-    padding: 16px 16px 32px;
+    padding: 28px 16px 32px;
   }
 
   .main > .offline {
@@ -2254,13 +2261,13 @@ ol.sheet {
   .split-list,
   .split-list.narrow {
     flex: 1 1 auto;
-    padding: 12px 16px 24px;
+    padding: 28px 16px 24px;
     border-right: 0;
   }
 
   .split-detail {
     display: none;
-    padding: 12px 16px 32px;
+    padding: 24px 16px 32px;
   }
 
   .split.has-detail > .split-list {
@@ -2313,15 +2320,30 @@ ol.sheet {
     height: 38px;
   }
 
+  .btn {
+    height: 38px;
+  }
+
   .ctl {
     width: 100%;
+    justify-content: flex-start;
   }
 
   .ctl:has(> .switch:only-child) {
     width: auto;
   }
 
-  .row:has(> .ctl > .switch:only-child) {
+  .ctl:has(> .value:only-child) {
+    flex: 1 1 0;
+    width: auto;
+    justify-content: flex-end;
+  }
+
+  .row:has(> .ctl > .value:only-child) > .row-head {
+    flex: 0 1 auto;
+  }
+
+  .row:has(> .ctl > .switch:only-child, > .ctl > .value:only-child) {
     flex-wrap: nowrap;
   }
 

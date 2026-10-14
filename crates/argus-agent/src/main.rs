@@ -84,7 +84,7 @@ fn run(config: &Config) -> ! {
         .map(|node| node.resolve_token().map(|token| Target { url: format!("{}/api/v1/ingest", node.url.trim_end_matches('/')), token, checks: node.checks }))
         .collect::<Result<_, _>>()
         .unwrap_or_else(|error| fail(&error));
-    for Target { url, .. } in nodes.iter().filter(|node| !node.url.starts_with("https://")) {
+    for Target { url, .. } in nodes.iter().filter(|node| clear_text(&node.url)) {
         log(&format!("warning: {url} is not HTTPS, the token is sent in clear text"));
     }
     let http: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(10))).build().into();
@@ -204,9 +204,27 @@ fn timestamp(seconds: u64) -> String {
     format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z", seconds % 86_400 / 3600, seconds % 3600 / 60, seconds % 60)
 }
 
+fn clear_text(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("http://") else { return !url.starts_with("https://") };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let host = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+    let host = if host.starts_with('[') { host.split(']').next().map_or(host, |h| &h[1..]) } else { host.split(':').next().unwrap_or(host) };
+    !(host.eq_ignore_ascii_case("localhost") || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn loopback_is_not_clear_text() {
+        assert!(!clear_text("https://argus.example.com/api/v1/ingest"));
+        assert!(!clear_text("http://127.0.0.1:8090/api/v1/ingest"));
+        assert!(!clear_text("http://localhost/api/v1/ingest"));
+        assert!(!clear_text("http://[::1]:8090/api/v1/ingest"));
+        assert!(clear_text("http://10.0.0.5:8090/api/v1/ingest"));
+        assert!(clear_text("http://127.0.0.1.example.com/api/v1/ingest"));
+    }
 
     #[test]
     fn timestamps() {

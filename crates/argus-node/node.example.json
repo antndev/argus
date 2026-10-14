@@ -109,7 +109,8 @@
     "retention": {
       "raw": "7d",
       "medium": "90d",
-      "long": "730d"
+      "long": "730d",
+      "daily": "3650d"
     }
   }
 }
