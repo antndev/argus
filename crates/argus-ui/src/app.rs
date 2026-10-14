@@ -57,47 +57,94 @@ pub fn App() -> impl IntoView {
 fn Login() -> impl IntoView {
     let store = use_store();
     let password = RwSignal::new(String::new());
-    let error = RwSignal::new(None::<String>);
+    let repeat = RwSignal::new(String::new());
+    let error = RwSignal::new(String::new());
     let busy = RwSignal::new(false);
+    let setup = move || store.gate.get() == "setup";
     let submit = move |event: SubmitEvent| {
         event.prevent_default();
-        busy.set(true);
         let secret = password.get_untracked();
+        if setup() && secret != repeat.get_untracked() {
+            error.set("The passwords do not match".to_string());
+            return;
+        }
+        busy.set(true);
+        let path = if setup() { "/api/v1/setup" } else { "/api/v1/login" };
         spawn_local(async move {
-            match api::send("/api/v1/login", &serde_json::json!({ "password": secret })).await {
+            match api::send(path, &serde_json::json!({ "password": secret })).await {
                 Ok(()) => {
                     let _ = password.try_set(String::new());
-                    let _ = error.try_set(None);
+                    let _ = repeat.try_set(String::new());
+                    let _ = error.try_set(String::new());
                     store.refresh();
                 }
                 Err(failure) => {
-                    let _ = error.try_set(Some(if failure.status == 401 { "Wrong password".to_string() } else { failure.text }));
+                    let _ = error.try_set(if failure.status == 401 { "Wrong password".to_string() } else { format::capitalize(&failure.text) });
+                    store.check_session();
                 }
             }
             let _ = busy.try_set(false);
         });
     };
-    view! {
-        <div class="login">
-            <form class="login-card" on:submit=submit>
-                <span class="login-icon" inner_html=icons::LOCK></span>
-                <div>
-                    <h1>"Argus is locked"</h1>
-                    <p>"Enter the dashboard password."</p>
-                </div>
+    let field = move |label: &'static str, value: RwSignal<String>, autocomplete: &'static str| {
+        view! {
+            <label class="field">
+                <span>{label}</span>
                 <input
                     class="input"
                     type="password"
-                    aria-label="Password"
-                    placeholder="Password"
-                    autocomplete="current-password"
+                    autocomplete=autocomplete
                     required
-                    autofocus
-                    prop:value=move || password.get()
-                    on:input=move |ev| password.set(event_target_value(&ev))
+                    prop:value=move || value.get()
+                    on:input=move |ev| {
+                        value.set(event_target_value(&ev));
+                        error.set(String::new());
+                    }
                 />
-                <p class="login-error" role="alert">{move || error.get().unwrap_or_default()}</p>
-                <button class="btn primary" type="submit" disabled=move || busy.get()>"Unlock"</button>
+            </label>
+        }
+    };
+    let form = move || {
+        match store.gate.get().as_str() {
+        "expired" => view! {
+            <div>
+                <h1>"Setup time is over"</h1>
+                <p>"A new password can only be set within 15 minutes after the node starts. Restart the node, or run argus-node reset-password on the server, then reload this page."</p>
+            </div>
+            <button class="btn primary" type="button" on:click=move |_| store.check_session()>"Check again"</button>
+        }
+        .into_any(),
+        "setup" => view! {
+            <div>
+                <h1>"Set up Argus"</h1>
+                <p>"Choose the password for this dashboard. It needs at least 10 characters."</p>
+            </div>
+            {field("New password", password, "new-password")}
+            {field("Repeat password", repeat, "new-password")}
+            <p class="login-error" role="alert">{move || error.get()}</p>
+            <button class="btn primary" type="submit" disabled=move || busy.get()>{move || if busy.get() { "Saving" } else { "Create password" }}</button>
+        }
+        .into_any(),
+        _ => view! {
+            <div>
+                <h1>"Sign in"</h1>
+                <p>"Enter the dashboard password to continue."</p>
+            </div>
+            {field("Password", password, "current-password")}
+            <p class="login-error" role="alert">{move || error.get()}</p>
+            <button class="btn primary" type="submit" disabled=move || busy.get()>{move || if busy.get() { "Signing in" } else { "Sign in" }}</button>
+        }
+        .into_any(),
+    }
+    };
+    view! {
+        <div class="login">
+            <form class="login-card" on:submit=submit>
+                <div class="login-brand">
+                    <span class="logo" inner_html=icons::LOGO></span>
+                    <span>"Argus"</span>
+                </div>
+                {form}
             </form>
         </div>
     }

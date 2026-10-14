@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
 
-use argon2::password_hash::{PasswordHasher, SaltString};
 use argus_model::{Check, Severity, duration_text};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -49,8 +48,6 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub simulate: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dashboard: Option<Dashboard>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peer: Option<Peer>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub zerobyte: Option<ZeroByte>,
@@ -71,6 +68,8 @@ pub struct Shared {
     pub rules: Vec<Rule>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub push: Option<Push>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub order: Vec<String>,
     #[serde(default = "backup_age")]
     pub backup_max_age: Span,
     #[serde(default)]
@@ -85,6 +84,7 @@ impl Default for Shared {
             checks: BTreeMap::new(),
             rules: default_rules(),
             push: None,
+            order: Vec::new(),
             backup_max_age: backup_age(),
             retention: Retention::default(),
         }
@@ -95,12 +95,6 @@ impl Shared {
     pub fn same(&self, other: &Shared) -> bool {
         Shared { revision: 0, ..self.clone() } == Shared { revision: 0, ..other.clone() }
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Dashboard {
-    pub password: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -193,13 +187,6 @@ impl Default for Config {
     }
 }
 
-fn hash_password(password: &str) -> Result<String, String> {
-    let mut salt = [0u8; 16];
-    getrandom::fill(&mut salt).map_err(|e| e.to_string())?;
-    let salt = SaltString::encode_b64(&salt).map_err(|e| e.to_string())?;
-    argon2::Argon2::default().hash_password(password.as_bytes(), &salt).map(|h| h.to_string()).map_err(|e| e.to_string())
-}
-
 fn is_sha256(text: &str) -> bool {
     text.len() == 64 && text.bytes().all(|b| b.is_ascii_hexdigit())
 }
@@ -255,9 +242,6 @@ impl Config {
     }
 
     pub fn normalize(&mut self) -> Result<(), String> {
-        if let Some(dashboard) = self.dashboard.as_mut().filter(|d| !d.password.starts_with("$argon2")) {
-            dashboard.password = hash_password(&dashboard.password)?;
-        }
         if let Some(push) = self.shared.push.as_mut().filter(|p| p.public_key.is_empty() || p.private_key.is_empty()) {
             (push.public_key, push.private_key) = crate::push::keypair();
         }
@@ -282,11 +266,6 @@ impl Config {
             if peer.url.as_deref().is_some_and(|url| !web_url(url)) {
                 return Err("the peer url must start with http:// or https://".into());
             }
-        }
-        if let Some(dashboard) = &self.dashboard
-            && dashboard.password.is_empty()
-        {
-            return Err("the dashboard password is empty".into());
         }
         if let Some(zerobyte) = &self.zerobyte {
             if zerobyte.webhook_token.as_deref().is_some_and(|t| t.len() < 16 || !plain_name(t)) {
@@ -367,9 +346,6 @@ impl Config {
     pub fn redacted(&self) -> Config {
         let mut config = self.clone();
         let hide = |value: &mut String| *value = HIDDEN.to_string();
-        if let Some(dashboard) = config.dashboard.as_mut() {
-            hide(&mut dashboard.password);
-        }
         if let Some(peer) = config.peer.as_mut() {
             hide(&mut peer.token);
         }
@@ -384,9 +360,6 @@ impl Config {
     }
 
     pub fn restore(&mut self, current: &Config) -> Result<(), String> {
-        if let Some(dashboard) = self.dashboard.as_mut() {
-            keep(&mut dashboard.password, current.dashboard.as_ref().map(|d| &d.password), "the dashboard password")?;
-        }
         if let Some(peer) = self.peer.as_mut() {
             keep(&mut peer.token, current.peer.as_ref().map(|p| &p.token), "the peer token")?;
         }
@@ -519,11 +492,10 @@ mod tests {
 
     #[test]
     fn plain_secrets_are_hashed_and_hidden_ones_kept() {
-        let mut current = Config { dashboard: Some(Dashboard { password: "secret".into() }), ..Default::default() };
+        let mut current = Config::default();
         current.shared.agents.insert("web".into(), "token-in-clear".into());
-        current.shared.push = Some(Push { subject: "mailto:admin@example.net".into(), ..Default::default() });
+        current.shared.push = Some(Push { subject: "mailto:admin@example.com".into(), ..Default::default() });
         current.normalize().expect("normalizes");
-        assert!(current.dashboard.as_ref().is_some_and(|d| d.password.starts_with("$argon2")));
         assert_eq!(current.shared.agents["web"], sha256_hex(b"token-in-clear"));
         current.validate().expect("valid with generated push keys");
         let mut incoming = current.redacted();

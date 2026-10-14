@@ -39,7 +39,6 @@ line_icon!(PLUS, r#"<path d="M8 3v10M3 8h10"/>"#);
 line_icon!(TRASH, r#"<path d="M2.5 4.5h11M6 4.5V3h4v1.5M4 4.5l.7 9h6.6l.7-9"/>"#);
 line_icon!(COPY, r#"<rect x="5.5" y="5.5" width="8" height="8" rx="1.25"/><path d="M3 10.5V3.75C3 3.3 3.3 3 3.75 3h6.75"/>"#);
 line_icon!(REFRESH, r#"<path d="M13.25 8A5.25 5.25 0 1 1 11.7 4.3M13.25 2.5v3h-3"/>"#);
-line_icon!(LOCK, r#"<rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/>"#);
 
 pub fn severity(severity: Severity) -> &'static str {
     match severity {

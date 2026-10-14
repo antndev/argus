@@ -3,17 +3,14 @@
   "listen": "0.0.0.0:8090",
   "database": "argus.db",
   "ui": true,
-  "dashboard": {
-    "password": "a password, replaced by its argon2 hash on the first start"
-  },
   "peer": {
     "name": "vps",
-    "url": "https://monitor-vps.example.net",
+    "url": "https://argus.external.example.com",
     "token": "shared sync secret, the same on both nodes"
   },
   "zerobyte": {
     "webhook_token": "RandomWebhookSecret123",
-    "url": "http://zerobyte.example.net:4096",
+    "url": "http://zerobyte.example.com:4096",
     "api_key": "zb_example",
     "interval": "5m"
   },
@@ -28,7 +25,7 @@
         {
           "name": "Website",
           "type": "http",
-          "url": "https://www.example.net/health",
+          "url": "https://www.example.com/health",
           "status": 200,
           "json": [
             {
@@ -38,7 +35,11 @@
           ],
           "timeout": "10s"
         },
-        { "name": "Router", "type": "ping", "host": "192.0.2.1" }
+        {
+          "name": "Router",
+          "type": "ping",
+          "host": "192.0.2.1"
+        }
       ]
     },
     "rules": [
@@ -96,10 +97,10 @@
       }
     ],
     "push": {
-      "subject": "mailto:admin@example.net",
+      "subject": "mailto:admin@example.com",
       "receipt_urls": [
-        "https://monitor.example.net",
-        "https://monitor-vps.example.net"
+        "https://argus.internal.example.com",
+        "https://argus.external.example.com"
       ],
       "status_every": "24h",
       "devices": []

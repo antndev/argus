@@ -136,8 +136,7 @@ mod tests {
 
     #[test]
     fn home_assistant_options_json_parses() {
-        let options =
-            r#"{"id":"homeassistant","site":"home","agent":"addon","interval":30,"root":"","nodes":[{"url":"https://monitor.example.net","token":"abc"}]}"#;
+        let options = r#"{"id":"homeassistant","site":"home","agent":"addon","interval":30,"root":"","nodes":[{"url":"https://argus.internal.example.com","token":"abc"}]}"#;
         let config = Config::parse(options).expect("options parse");
         assert_eq!(config.id.as_deref(), Some("homeassistant"));
         assert_eq!(config.nodes.len(), 1);

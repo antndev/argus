@@ -52,7 +52,7 @@ pub struct Store {
     pub overview: RwSignal<Option<Overview>>,
     pub offline: RwSignal<bool>,
     pub locked: RwSignal<bool>,
-    pub login_enabled: RwSignal<bool>,
+    pub gate: RwSignal<String>,
     pub events: RwSignal<Vec<Event>>,
     pub toast: RwSignal<Option<(u64, String)>>,
     pub mute_target: RwSignal<Option<String>>,
@@ -62,6 +62,7 @@ pub struct Store {
     pub saving: RwSignal<bool>,
     pub simulation: RwSignal<Option<serde_json::Value>>,
     pub simulation_help: RwSignal<bool>,
+    pub dragging: RwSignal<Option<String>>,
     toasts: StoredValue<u64>,
 }
 
@@ -83,7 +84,7 @@ impl Store {
             overview: RwSignal::new(None),
             offline: RwSignal::new(false),
             locked: RwSignal::new(false),
-            login_enabled: RwSignal::new(false),
+            gate: RwSignal::new("login".to_string()),
             events: RwSignal::new(Vec::new()),
             toast: RwSignal::new(None),
             mute_target: RwSignal::new(None),
@@ -93,6 +94,7 @@ impl Store {
             saving: RwSignal::new(false),
             simulation: RwSignal::new(None),
             simulation_help: RwSignal::new(false),
+            dragging: RwSignal::new(None),
             toasts: StoredValue::new(0),
         }
     }
@@ -111,8 +113,10 @@ impl Store {
                     store.locked.set(false);
                 }
                 Err(failure) if failure.status == 401 => {
+                    if !store.locked.get_untracked() {
+                        store.check_session();
+                    }
                     store.locked.set(true);
-                    store.login_enabled.set(true);
                     store.overview.set(None);
                 }
                 Err(_) => store.offline.set(true),
@@ -124,7 +128,7 @@ impl Store {
         let store = *self;
         spawn_local(async move {
             if let Ok(session) = api::get::<serde_json::Value>("/api/v1/session").await {
-                store.login_enabled.set(session["required"].as_bool().unwrap_or(false));
+                store.gate.set(session["state"].as_str().unwrap_or("login").to_string());
             }
         });
     }
@@ -201,6 +205,25 @@ impl Store {
 
     pub fn host_ids(&self) -> Vec<String> {
         self.overview.with(|o| o.as_ref().map(|o| o.hosts.iter().map(|h| h.info.id.clone()).collect()).unwrap_or_default())
+    }
+
+    pub fn move_host(&self, id: &str, to: usize) {
+        let mut ids = self.host_ids();
+        let Some(from) = ids.iter().position(|h| h == id) else { return };
+        let moved = ids.remove(from);
+        ids.insert(to.min(ids.len()), moved);
+        self.overview.update(|o| {
+            if let Some(o) = o {
+                o.hosts.sort_by_key(|h| ids.iter().position(|id| *id == h.info.id));
+            }
+        });
+        let store = *self;
+        spawn_local(async move {
+            if let Err(failure) = api::send("/api/v1/order", &serde_json::json!({ "hosts": ids })).await {
+                store.notify(format!("Order not saved, {failure}"));
+            }
+            store.refresh();
+        });
     }
 
     pub fn host(&self, id: &str) -> Option<HostSummary> {

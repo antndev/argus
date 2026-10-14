@@ -12,14 +12,12 @@ mod util;
 mod zerobyte;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
-use argon2::password_hash::{PasswordHasher, SaltString};
 use argus_model::{AlertState, CheckStatus, Event, HostSnapshot, Message, Report, Sample, Severity};
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
@@ -112,9 +110,6 @@ impl App {
         if let Some(path) = &self.config_path {
             next.save(path)?;
             *lock(&self.config_stamp) = modified(path);
-        }
-        if next.dashboard != current.dashboard {
-            self.sessions().clear();
         }
         let removed: Vec<String> = current.shared.agents.keys().filter(|id| !next.shared.agents.contains_key(*id)).cloned().collect();
         *self.config.write().unwrap_or_else(|p| p.into_inner()) = Arc::new(next);
@@ -275,11 +270,9 @@ fn load_or_create(path: &Path, create: bool) -> Result<Config, String> {
     if path.exists() || !create {
         return Config::load(path);
     }
-    let password = random_id(20);
-    let mut config = Config { dashboard: Some(config::Dashboard { password: password.clone() }), ..Config::default() };
-    config.normalize()?;
+    let config = Config::default();
     config.save(path)?;
-    log(&format!("created {} with defaults and the dashboard password {password}, change it under Settings", path.display()));
+    log(&format!("created {} with defaults", path.display()));
     Ok(config)
 }
 
@@ -318,29 +311,6 @@ fn print_token() {
     println!("sha256: {}", sha256_hex(token.as_bytes()));
 }
 
-fn print_password_hash() {
-    let mut line = String::new();
-    eprintln!("password (read from stdin):");
-    let password = match std::io::stdin().lock().read_line(&mut line) {
-        Ok(_) => line.trim_start_matches('\u{feff}').trim(),
-        Err(_) => "",
-    };
-    if password.is_empty() {
-        eprintln!("no password given");
-        std::process::exit(1);
-    }
-    let mut salt = [0u8; 16];
-    getrandom::fill(&mut salt).expect("operating system random source");
-    let salt = SaltString::encode_b64(&salt).expect("valid salt");
-    match argon2::Argon2::default().hash_password(password.as_bytes(), &salt) {
-        Ok(hash) => println!("{hash}"),
-        Err(error) => {
-            eprintln!("hashing failed: {error}");
-            std::process::exit(1);
-        }
-    }
-}
-
 pub fn router(app: Arc<App>) -> Router {
     let protected = Router::new()
         .route("/api/v1/overview", get(api::overview))
@@ -356,11 +326,14 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/v1/simulate", get(simulate::get).post(simulate::toggle))
         .route("/api/v1/push/devices", post(notify::subscribe))
         .route("/api/v1/messages", get(notify::messages))
+        .route("/api/v1/order", post(api::order))
+        .route("/api/v1/password", post(session::change))
         .route_layer(axum::middleware::from_fn_with_state(app.clone(), session::require));
     let dashboard = Router::new()
         .merge(protected)
         .route("/api/v1/session", get(session::status))
         .route("/api/v1/login", post(session::login))
+        .route("/api/v1/setup", post(session::setup))
         .route("/api/v1/logout", post(session::logout))
         .route_layer(axum::middleware::from_fn_with_state(app.clone(), session::enabled));
     Router::new()
@@ -406,20 +379,21 @@ async fn main() {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
         Some("token") => return print_token(),
-        Some("password") => return print_password_hash(),
-        Some("serve" | "check" | "--config") | None => {}
+        Some("serve" | "check" | "reset-password" | "--config") | None => {}
         Some(other) => {
-            eprintln!("unknown command {other}, use serve, check, token or password");
+            eprintln!("unknown command {other}, use serve, check, token or reset-password");
             std::process::exit(2);
         }
     }
     let path = config_path(&args);
-    let checking = args.get(1).map(String::as_str) == Some("check");
+    let command = args.get(1).map(String::as_str);
+    let checking = command == Some("check");
+    let resetting = command == Some("reset-password");
     let fail = |error: String| -> ! {
         eprintln!("{error}");
         std::process::exit(1);
     };
-    let mut config = load_or_create(&path, !checking).unwrap_or_else(|error| fail(error));
+    let mut config = load_or_create(&path, !checking && !resetting).unwrap_or_else(|error| fail(error));
     let hashed = config.clone();
     config.normalize().and_then(|_| config.validate()).unwrap_or_else(|error| fail(format!("invalid config {}: {error}", path.display())));
     if checking {
@@ -432,14 +406,20 @@ async fn main() {
     }
     let database = path.parent().unwrap_or(Path::new(".")).join(&config.database);
     let db = db::open(&database.to_string_lossy()).unwrap_or_else(|error| fail(format!("cannot open database {}: {error}", database.display())));
+    if resetting {
+        session::reset(&db, now_ms()).unwrap_or_else(|error| fail(format!("cannot reset the password: {error}")));
+        println!("dashboard password removed, open the dashboard within 15 minutes to set a new one");
+        return;
+    }
     if config.shared.agents.is_empty() {
         log("no agents configured, every report will be rejected");
     }
     if config.shared.push.as_ref().is_none_or(|p| p.devices.is_empty()) {
         log("no phone is set up for notifications, alerts only show in the dashboard");
     }
-    if config.ui && config.dashboard.is_none() {
-        log("the dashboard has no login and can change the configuration, keep it off the internet or set a password");
+    if config.ui && !session::has_password(&db) {
+        let _ = session::open_setup(&db, now_ms());
+        log("no dashboard password yet, open the dashboard within 15 minutes to set it");
     }
     let listen = config.listen.clone();
     let mut app = App::new(config, db);

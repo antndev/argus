@@ -69,6 +69,7 @@ pub fn HostsPage() -> impl IntoView {
     view! {
         <div class="split">
             <div class="split-list">
+                <a class="btn" href="#/settings/agents"><span class="ico" inner_html=icons::PLUS></span>"Add host"</a>
                 <label class="filter">
                     <span class="ico" inner_html=icons::SEARCH></span>
                     <input type="search" placeholder="Filter hosts" aria-label="Filter hosts" prop:value=move || filter.get() on:input=move |ev| filter.set(event_target_value(&ev))/>

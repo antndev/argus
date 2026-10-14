@@ -32,8 +32,9 @@ changes anything on them.
 - Node to node sync uses a shared secret and is always started by one side, so the other side never needs a way in.
   The sync also carries the shared settings (agent token hashes, checks, rules, push keys and devices, retention), so
   a node holding the sync secret can change them on the other node.
-- The config file holds tokens, the sync secret and password hashes. The node writes it with mode 600 and replaces
-  clear text passwords and agent tokens with their hashes when it loads the file. Writes are atomic.
+- The config file holds the sync secret, the push key and agent token hashes, never the dashboard password. The node
+  writes it with mode 600 and replaces clear text agent tokens with their hashes when it loads the file. Writes are
+  atomic.
 - Notifications are encrypted end to end with the web push standard (RFC 8291, aes128gcm) for each phone. The push
   service (Apple, Google, Mozilla) sees the size and time of a message, never its text. Requests to the push service
   are signed with the node's VAPID key (RFC 8292).
@@ -48,12 +49,11 @@ changes anything on them.
 
 ### Dashboard
 
-- The dashboard login is optional. With `dashboard.password` set, the dashboard API (including mutes and the
-  configuration) needs a session cookie (HttpOnly, SameSite Strict, Secure behind HTTPS, 30 days). Failed logins wait
-  one second, changing the password ends every session. A new config file gets a random password, printed once in
-  the log. Without a password the dashboard is open and anyone who reaches it can change the configuration. A web
-  page you visit can also reach an open dashboard on your network through DNS rebinding, so remove the password only
-  behind a reverse proxy that answers for a fixed host name.
+- The dashboard always needs a login. The password is never stored in the config file, only its argon2 hash in the
+  node's database. A node without a password accepts a new one only within 15 minutes after its start or after
+  `argus-node reset-password`, which needs access to the server. Sessions use an HttpOnly, SameSite Strict cookie
+  (Secure behind HTTPS) for 30 days and live in memory. Failed logins wait one second, password checks run one at a
+  time. Changing or resetting the password ends every session.
 - The configuration API never returns secrets. They come back as `********`, and a save that keeps `********`
   keeps the stored value. Saves only accept JSON bodies, which a cross-site form cannot send, and fail when the
   configuration changed since it was loaded.

@@ -23,6 +23,7 @@ pub fn OverviewPage() -> impl IntoView {
         <section class="hosts">
             <div class="sec-head">
                 <h2>"Hosts"</h2>
+                <span class="meta">"Drag cards to change the order"</span>
             </div>
             <Show when=move || store.loaded() && ids.with(Vec::is_empty)>
                 <p class="meta">"No agent has reported yet."</p>

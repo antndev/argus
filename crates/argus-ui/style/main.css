@@ -1737,42 +1737,38 @@ td .sev {
   opacity: 1;
 }
 .login {
-  position: relative;
   min-height: 100dvh;
   display: grid;
   place-items: center;
-  padding: 16px 24px 64px;
+  padding: 24px 16px;
   background: var(--bg-side);
 }
 
-.login::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background-image: radial-gradient(var(--light-ring) 0.8px, transparent 1.2px);
-  background-size: 18px 18px;
-  mask-image: radial-gradient(circle at center, transparent 12%, #000 68%);
-  pointer-events: none;
-}
-
 .login-card {
-  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  width: min(100%, 360px);
+  gap: 16px;
+  width: min(100%, 380px);
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg);
+  box-shadow: var(--lift);
   animation: rise 0.45s var(--ease) both;
 }
 
-.login-icon {
+.login-brand {
   display: flex;
   align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
-  background: var(--bg-raised);
-  color: var(--text-2);
+  gap: 10px;
+  margin-bottom: 4px;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.login-brand .logo {
+  width: 28px;
+  height: 28px;
 }
 
 .login-card h1 {
@@ -1780,18 +1776,19 @@ td .sev {
   font-weight: 600;
 }
 
-.login-card p {
+.login-card h1 + p {
   margin: 4px 0 0;
   color: var(--text-2);
 }
 
 .login-card .btn {
   width: 100%;
+  height: 36px;
 }
 
 .login-error {
   min-height: 16px;
-  margin: -4px 0;
+  margin: -6px 0;
   font-size: 12px;
   color: var(--err);
 }
@@ -2314,4 +2311,13 @@ kbd {
     right: 16px;
     width: auto;
   }
+}
+
+.host-card.dragging {
+  opacity: 0.45;
+}
+
+.host-card.drop {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
 }

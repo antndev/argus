@@ -163,8 +163,56 @@ pub fn HostCard(id: String, index: usize) -> impl IntoView {
     let heat = move || host.with(|h| h.as_ref().and_then(hottest));
     let has_heat = move || heat().is_some();
     let href = Route::Host(id.clone()).href();
+    let (drag_id, drop_id, key_id, dragged) = (id.clone(), id.clone(), id.clone(), id.clone());
+    let target = RwSignal::new(false);
+    let drop = move |ev: leptos::ev::DragEvent| {
+        ev.prevent_default();
+        target.set(false);
+        if let Some(from) = store.dragging.get_untracked().filter(|from| *from != drop_id)
+            && let Some(to) = store.host_ids().iter().position(|h| *h == drop_id)
+        {
+            store.move_host(&from, to);
+        }
+        store.dragging.set(None);
+    };
+    let keys = move |ev: leptos::ev::KeyboardEvent| {
+        if !ev.alt_key() {
+            return;
+        }
+        let step: isize = match ev.key().as_str() {
+            "ArrowLeft" | "ArrowUp" => -1,
+            "ArrowRight" | "ArrowDown" => 1,
+            _ => return,
+        };
+        ev.prevent_default();
+        if let Some(at) = store.host_ids().iter().position(|h| *h == key_id) {
+            store.move_host(&key_id, at.saturating_add_signed(step));
+        }
+    };
     view! {
-        <a class=move || format!("host-card {}", class(state())) href=href style=format!("--i:{index}")>
+        <a
+            class=move || format!("host-card {}", class(state()))
+            class:drop=move || target.get()
+            class:dragging=move || store.dragging.with(|d| d.as_deref() == Some(dragged.as_str()))
+            href=href
+            style=format!("--i:{index}")
+            draggable="true"
+            aria-keyshortcuts="Alt+ArrowLeft Alt+ArrowRight"
+            on:dragstart=move |ev: leptos::ev::DragEvent| {
+                if let Some(data) = ev.data_transfer() {
+                    let _ = data.set_data("text/plain", &drag_id);
+                }
+                store.dragging.set(Some(drag_id.clone()));
+            }
+            on:dragend=move |_| store.dragging.set(None)
+            on:dragover=move |ev: leptos::ev::DragEvent| {
+                ev.prevent_default();
+                target.set(store.dragging.with_untracked(Option::is_some));
+            }
+            on:dragleave=move |_| target.set(false)
+            on:drop=drop
+            on:keydown=keys
+        >
             <div class="hc-id">
                 <div class="hc-top">
                     <span class="hc-name">{id.clone()}</span>

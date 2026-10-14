@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, time INTEGER NOT NULL, d
 CREATE TABLE IF NOT EXISTS mutes (id TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, time INTEGER NOT NULL, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sent (id TEXT PRIMARY KEY, time INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS secrets (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS receipts (id TEXT PRIMARY KEY, time INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS backups (name TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
@@ -281,6 +282,24 @@ pub fn backups(db: &Db) -> Vec<BackupSchedule> {
 
 pub fn save_backup(db: &Db, backup: &BackupSchedule) -> rusqlite::Result<()> {
     db.prepare_cached("INSERT OR REPLACE INTO backups (name, data) VALUES (?1, ?2)")?.execute(params![backup.name, json(backup)])?;
+    Ok(())
+}
+
+pub fn secret(db: &Db, key: &str) -> Option<String> {
+    db.prepare_cached("SELECT value FROM secrets WHERE key = ?1").ok()?.query_row([key], |row| row.get(0)).optional().ok().flatten()
+}
+
+pub fn create_secret(db: &Db, key: &str, value: &str) -> rusqlite::Result<bool> {
+    Ok(db.prepare_cached("INSERT OR IGNORE INTO secrets (key, value) VALUES (?1, ?2)")?.execute(params![key, value])? > 0)
+}
+
+pub fn set_secret(db: &Db, key: &str, value: &str) -> rusqlite::Result<()> {
+    db.prepare_cached("INSERT OR REPLACE INTO secrets (key, value) VALUES (?1, ?2)")?.execute(params![key, value])?;
+    Ok(())
+}
+
+pub fn delete_secret(db: &Db, key: &str) -> rusqlite::Result<()> {
+    db.prepare_cached("DELETE FROM secrets WHERE key = ?1")?.execute([key])?;
     Ok(())
 }
 

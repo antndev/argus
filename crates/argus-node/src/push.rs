@@ -142,7 +142,7 @@ mod tests {
     fn vapid_token_is_signed_for_the_push_service_origin() {
         let (public, private) = keypair();
         assert!(valid_public_key(&public) && valid_private_key(&private));
-        let header = vapid("https://web.push.apple.com/QGuQyavXutnMH", "mailto:admin@example.net", &private, 1_000).expect("token");
+        let header = vapid("https://web.push.apple.com/QGuQyavXutnMH", "mailto:admin@example.com", &private, 1_000).expect("token");
         let (token, key) = header.strip_prefix("vapid t=").and_then(|rest| rest.split_once(", k=")).expect("format");
         assert_eq!(key, public);
         let (signed, signature) = token.rsplit_once('.').expect("signature");

@@ -71,7 +71,7 @@ pub fn ChecksPage() -> impl IntoView {
     view! {
         <div class="filters">
             {segmented(store.check_filter, CheckFilter::OPTIONS, "Filter checks")}
-            <a class="link" href="#/settings/checks">"Add or change checks"</a>
+            <a class="btn" href="#/settings/checks"><span class="ico" inner_html=crate::icons::PLUS></span>"Add check"</a>
         </div>
         <Show when=empty>
             <p class="meta">"No checks configured yet."</p>

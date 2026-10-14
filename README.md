@@ -37,20 +37,28 @@ agents ──HTTPS──▶ home node ◀──sync, started by home──▶ vp
 argus-node serve --config /data/argus.json
 argus-node check --config /data/argus.json   # validates the config without starting
 argus-node token       # prints a new random token
-argus-node password    # reads a password from stdin and prints its argon2 hash
+argus-node reset-password --config /data/argus.json   # forgot the dashboard password
 ```
 
 Everything is configured either in the dashboard under Settings or in the JSON file, whichever you prefer. Both
 stay in sync: the dashboard writes the file, and changes to the file apply within a few seconds. If the file does
-not exist the node creates it with defaults and a random dashboard password, printed once in the log. Passwords and agent tokens may be written in clear text, the node
-replaces them with their hashes on the next load. The dashboard never shows secrets, only whether one is stored.
+not exist the node creates it with defaults. Agent tokens may be written in clear text, the node replaces them with
+their sha256 on the next load. The dashboard never shows secrets, only whether one is stored.
+
+The dashboard always needs a password, and it is never part of the config file. On the first visit the dashboard asks
+for a new one; this only works within 15 minutes after the node starts, so nobody else on the network can claim an
+unconfigured node later. The node keeps only the argon2 hash, in its database. Change it under Settings, Password.
+If it is lost, run `argus-node reset-password` on the server (in Docker:
+`docker exec argus-node /argus-node reset-password --config /data/argus.json`) and set a new one within 15 minutes.
+
+A naming suggestion for two nodes: `argus.internal.example.com` for the home node with the dashboard, reachable only
+inside your network, and `argus.external.example.com` for the public node.
 
 `crates/argus-node/node.example.json` shows every option. The important parts:
 
 - `name`: this node's name, which is also the `site` of the hosts it owns.
 - `peer`: the other node. The node that sets `url` starts the sync, both use the same `token`.
 - `zerobyte`: webhook token and optional API access for backup monitoring.
-- `dashboard`: optional `password` that turns on the dashboard login.
 - `shared`: settings both nodes keep identical. The node with the newer `revision` wins, on equal revisions the node
   that starts the sync wins.
   - `agents`: host id to that host's token or its sha256.
@@ -68,7 +76,7 @@ Removing a host from `agents` also removes it from the dashboard. Its history st
 Run the node behind a reverse proxy that terminates TLS. Example with Caddy for a node whose dashboard stays private:
 
 ```
-monitor-vps.example.net {
+argus.external.example.com {
 	@public path /api/v1/ingest /api/v1/sync /api/v1/push/receipt/*
 	handle @public {
 		reverse_proxy argus-node:8090

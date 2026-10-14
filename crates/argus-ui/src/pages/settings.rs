@@ -23,7 +23,7 @@ const PAGES: [(&str, &str); 12] = [
     ("peer", "Second node"),
     ("backups", "Backups"),
     ("retention", "Data retention"),
-    ("dashboard", "Dashboard login"),
+    ("dashboard", "Password"),
     ("appearance", "Appearance"),
     ("json", "JSON"),
     ("about", "About"),
@@ -452,14 +452,14 @@ fn check_card(store: Store, host: String, index: usize) -> impl IntoView {
         let p = |field: &str| format!("{base}/{field}");
         match kind.get().as_str() {
             "tcp" => view! {
-                {field("Host", text_input(store, p("host"), "db.example.net", false))}
+                {field("Host", text_input(store, p("host"), "db.example.com", false))}
                 {field("Port", number_input(store, p("port"), "5432", false))}
                 {field("Timeout", text_input(store, p("timeout"), "10s", true))}
             }
             .into_any(),
             "ping" => view! { {field("Host", text_input(store, p("host"), "192.0.2.1", false))} }.into_any(),
             _ => view! {
-                {field("URL", text_input(store, p("url"), "https://service.example.net/health", false))}
+                {field("URL", text_input(store, p("url"), "https://service.example.com/health", false))}
                 {field("Expected status", number_input(store, p("status"), "any 2xx", true))}
                 {field("Body contains", text_input(store, p("contains"), "optional", true))}
                 {field("Timeout", text_input(store, p("timeout"), "10s", true))}
@@ -715,8 +715,8 @@ fn notifications(store: Store) -> impl IntoView {
         <p class="lead">"Argus encrypts every notification and hands it straight to the push service of your phone, Apple on an iPhone. It only sees encrypted data, the phone decrypts, shows the text and confirms receipt."</p>
         {row("Phone notifications", "Shared by both nodes, either one can notify.", switch(store, "/shared/push", push_template))}
         <Show when=enabled>
-            {row("Contact", "Apple asks every sender for a mailto: or https:// address.", text_input(store, "/shared/push/subject".into(), "mailto:you@example.net", false))}
-            {row("Confirmation addresses", "Where the phone confirms receipt, this dashboard and the node that is reachable from outside.", list_input(store, "/shared/push/receipt_urls".into(), "https://monitor.example.net", None))}
+            {row("Contact", "Apple asks every sender for a mailto: or https:// address.", text_input(store, "/shared/push/subject".into(), "mailto:you@example.com", false))}
+            {row("Confirmation addresses", "Where the phone confirms receipt, this dashboard and the node that is reachable from outside.", list_input(store, "/shared/push/receipt_urls".into(), "https://argus.internal.example.com", None))}
             {row("Status message", "A short daily all clear proves the path works. Empty turns it off.", text_input(store, "/shared/push/status_every".into(), "24h", true))}
             {row("This device", "Run once per phone, from the installed Argus app.", this_device(store))}
             {group("Devices")}
@@ -743,7 +743,7 @@ fn peer(store: Store) -> impl IntoView {
         {row("Second node", "Turn off for a single node setup.", switch(store, "/peer", || json!({ "name": "vps", "token": "" })))}
         <Show when=enabled>
             {row("Name", "The other node's name.", text_input(store, "/peer/name".into(), "vps", false))}
-            {row("Address", "Set it only on the node that starts the sync, usually the one at home. Leave it empty on the other node.", text_input(store, "/peer/url".into(), "https://monitor-vps.example.net", true))}
+            {row("Address", "Set it only on the node that starts the sync, usually the one at home. Leave it empty on the other node.", text_input(store, "/peer/url".into(), "https://argus.external.example.com", true))}
             {row("Sync token", "The same secret on both nodes, at least 16 characters.", token_input(store, "/peer/token".into(), false))}
         </Show>
     }
@@ -761,7 +761,7 @@ fn backups(store: Store) -> impl IntoView {
         {row("ZeroByte", "Watch backups and mirrors.", switch(store, "/zerobyte", || json!({ "interval": "5m" })))}
         <Show when=enabled>
             {row("Webhook token", view! { <span class="mono">{hook}</span> }, token_input(store, "/zerobyte/webhook_token".into(), true))}
-            {row("API address", "Optional, for the mirror status.", text_input(store, "/zerobyte/url".into(), "http://zerobyte.example.net:4096", true))}
+            {row("API address", "Optional, for the mirror status.", text_input(store, "/zerobyte/url".into(), "http://zerobyte.example.com:4096", true))}
             {row("API key", "ZeroByte keys can also delete backups, keep this node private.", password_input(store, "/zerobyte/api_key".into()))}
             {row("Poll interval", "", text_input(store, "/zerobyte/interval".into(), "5m", false))}
         </Show>
@@ -779,16 +779,44 @@ fn retention(store: Store) -> impl IntoView {
 }
 
 fn dashboard(store: Store) -> impl IntoView {
-    let enabled = move || read(store, "/dashboard").is_some();
+    let current = RwSignal::new(String::new());
+    let next = RwSignal::new(String::new());
+    let repeat = RwSignal::new(String::new());
+    let busy = RwSignal::new(false);
+    let change = move |_| {
+        if next.get_untracked() != repeat.get_untracked() {
+            store.notify("The new passwords do not match");
+            return;
+        }
+        busy.set(true);
+        let body = json!({ "current": current.get_untracked(), "password": next.get_untracked() });
+        spawn_local(async move {
+            match api::send("/api/v1/password", &body).await {
+                Ok(()) => {
+                    store.notify("Password changed, other sessions were signed out");
+                    for field in [current, next, repeat] {
+                        field.set(String::new());
+                    }
+                }
+                Err(failure) => store.notify(format!("Not changed, {failure}")),
+            }
+            busy.set(false);
+        });
+    };
+    let input = move |value: RwSignal<String>, autocomplete: &'static str| {
+        view! {
+            <input class="input" type="password" autocomplete=autocomplete prop:value=move || value.get() on:input=move |ev| value.set(event_target_value(&ev))/>
+        }
+    };
     view! {
-        <p class="lead">"Without a password everyone who reaches this page can read and change the configuration. Changing the password signs everyone out."</p>
-        {row("Require a password", "Applies to this node only.", switch(store, "/dashboard", || json!({ "password": "" })))}
-        <Show when=enabled>
-            {row("Password", "Stored as an argon2 hash.", password_input(store, "/dashboard/password".into()))}
-        </Show>
-        <Show when=move || store.login_enabled.get()>
-            {row("Session", "", view! { <button class="btn" type="button" on:click=move |_| store.logout()>"Sign out"</button> })}
-        </Show>
+        <p class="lead">"The password protects this node's dashboard. Only its argon2 hash is stored, in the node's database and never in the config file. If it is lost, run argus-node reset-password on the server and set a new one within 15 minutes."</p>
+        {row("Current password", "", input(current, "current-password"))}
+        {row("New password", "At least 10 characters.", input(next, "new-password"))}
+        {row("Repeat new password", "", input(repeat, "new-password"))}
+        {row("", "Changing the password signs out every other session.", view! {
+            <button class="btn primary" type="button" disabled=move || busy.get() on:click=change>"Change password"</button>
+        })}
+        {row("Session", "", view! { <button class="btn" type="button" on:click=move |_| store.logout()>"Sign out"</button> })}
     }
 }
 

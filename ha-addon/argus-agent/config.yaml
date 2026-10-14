@@ -21,7 +21,7 @@ options:
   agent: addon
   interval: 30
   nodes:
-    - url: https://monitor.example.net
+    - url: https://argus.internal.example.com
       token: ""
 schema:
   id: str

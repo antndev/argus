@@ -7,7 +7,7 @@ root = "/host"             # host filesystem prefix when running in a container,
 agent = "container"        # container | native | addon
 
 [[nodes]]
-url = "https://monitor.example.net"
+url = "https://argus.internal.example.com"
 token = "change-me"        # or token_file = "/run/secrets/argus-token"
 checks = true              # run the http, tcp and ping checks this node hands out, false to ignore them
 
@@ -22,7 +22,7 @@ interfaces = { pppoe0 = "WAN" }                      # optional description over
 [[checks]]
 name = "Web"
 type = "http"
-url = "https://service.example.net/health"
+url = "https://service.example.com/health"
 status = 200                                    # optional, default is any 2xx or 3xx
 contains = "ok"                                 # optional
 json = [{ path = "status", equals = "ok" }]     # optional, dotted path, equals a string, number or bool
@@ -31,7 +31,7 @@ timeout = 10
 [[checks]]
 name = "Game server"
 type = "tcp"
-host = "game.example.net"
+host = "game.example.com"
 port = 25565
 
 [[checks]]

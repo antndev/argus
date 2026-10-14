@@ -74,6 +74,8 @@ pub async fn overview(State(app): State<Arc<App>>) -> Json<Overview> {
     };
     let config = app.config();
     let me = config.name.clone();
+    let mut snapshots = snapshots;
+    snapshots.sort_by_key(|s| config.shared.order.iter().position(|id| *id == s.report.host.id).unwrap_or(usize::MAX));
     let hosts = snapshots
         .into_iter()
         .map(|snapshot| {
@@ -235,4 +237,23 @@ pub async fn notify_test(State(app): State<Arc<App>>) -> Json<Value> {
         delivered: None,
     };
     Json(json!({ "result": notify::deliver(&app, vec![message]) }))
+}
+
+#[derive(Deserialize)]
+pub struct Order {
+    hosts: Vec<String>,
+}
+
+pub async fn order(State(app): State<Arc<App>>, Json(order): Json<Order>) -> Response {
+    let mut next = (*app.config()).clone();
+    next.shared.order = order.hosts.into_iter().filter(|id| next.shared.agents.contains_key(id)).collect();
+    let worker = app.clone();
+    match tokio::task::spawn_blocking(move || worker.apply_config(next, true)).await {
+        Ok(Ok(_)) => {
+            app.wake_sync();
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(Err(error)) => (StatusCode::BAD_REQUEST, error).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }
