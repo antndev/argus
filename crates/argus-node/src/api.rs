@@ -1,9 +1,7 @@
 use std::io::Read;
 use std::sync::Arc;
 
-use argus_model::{
-    Alert, AlertState, BackupSchedule, Event, HostInfo, HostSummary, IngestReply, Message, NodeStatus, Overview, Report, RuleInfo, SeriesData, Severity,
-};
+use argus_model::{Alert, AlertState, BackupSchedule, Event, HostInfo, HostSummary, IngestReply, NodeStatus, Overview, Report, RuleInfo, SeriesData, Severity};
 use axum::Json;
 use axum::extract::{Query, Request, State};
 use axum::http::{StatusCode, header};
@@ -17,7 +15,7 @@ use crate::config::Config;
 use crate::rules::{self, STALE};
 use crate::sync::bearer;
 use crate::util::{DAY, HOUR, MINUTE, now_ms, random_id, sha256_hex};
-use crate::{App, db, notify, zerobyte};
+use crate::{App, db, zerobyte};
 
 const MAX_REPORT: u64 = 16 * 1024 * 1024;
 const MAX_UPLOAD: usize = 4 * 1024 * 1024;
@@ -210,18 +208,6 @@ pub async fn put_config(State(app): State<Arc<App>>, Json(update): Json<ConfigUp
 
 pub async fn token() -> Json<Value> {
     Json(json!({ "token": random_id(40) }))
-}
-
-pub async fn notify_test(State(app): State<Arc<App>>) -> Json<Value> {
-    let message = Message {
-        id: random_id(12),
-        time: now_ms(),
-        title: "Test notification".to_string(),
-        message: format!("Sent from the {} node dashboard", app.config().name),
-        priority: 3,
-        delivered: None,
-    };
-    Json(json!({ "result": notify::deliver(&app, vec![message]) }))
 }
 
 #[derive(Deserialize)]

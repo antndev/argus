@@ -146,35 +146,6 @@ pub fn Sparkline(host: String, index: usize) -> impl IntoView {
     }
 }
 
-pub fn drag_start(store: Store, id: String) -> impl Fn(leptos::ev::DragEvent) + 'static {
-    move |ev| {
-        if let Some(data) = ev.data_transfer() {
-            let _ = data.set_data("text/plain", &id);
-        }
-        store.dragging.set(Some(id.clone()));
-    }
-}
-
-pub fn drag_over(store: Store, target: RwSignal<bool>) -> impl Fn(leptos::ev::DragEvent) + 'static {
-    move |ev| {
-        ev.prevent_default();
-        target.set(store.dragging.with_untracked(Option::is_some));
-    }
-}
-
-pub fn drop_on(store: Store, id: String, target: RwSignal<bool>) -> impl Fn(leptos::ev::DragEvent) + 'static {
-    move |ev| {
-        ev.prevent_default();
-        target.set(false);
-        if let Some(from) = store.dragging.get_untracked().filter(|from| *from != id)
-            && let Some(to) = store.host_ids().iter().position(|h| *h == id)
-        {
-            store.move_host(&from, to);
-        }
-        store.dragging.set(None);
-    }
-}
-
 pub fn move_keys(store: Store, id: String) -> impl Fn(leptos::ev::KeyboardEvent) + 'static {
     move |ev| {
         if !ev.alt_key() {
@@ -220,25 +191,13 @@ pub fn HostCard(id: String, index: usize) -> impl IntoView {
     let heat = move || host.with(|h| h.as_ref().and_then(hottest));
     let has_heat = move || heat().is_some();
     let href = Route::Host(id.clone()).href();
-    let dragged = id.clone();
     let spark = StoredValue::new(id.clone());
-    let target = RwSignal::new(false);
     view! {
         <a
             class=move || format!("host-card {}", class(state()))
             class:pending=waiting
-            class:drop=move || target.get()
-            class:dragging=move || store.dragging.with(|d| d.as_deref() == Some(dragged.as_str()))
             href=href
             style=format!("--i:{index}")
-            draggable="true"
-            aria-keyshortcuts="Alt+ArrowLeft Alt+ArrowRight"
-            on:dragstart=drag_start(store, id.clone())
-            on:dragend=move |_| store.dragging.set(None)
-            on:dragover=drag_over(store, target)
-            on:dragleave=move |_| target.set(false)
-            on:drop=drop_on(store, id.clone(), target)
-            on:keydown=move_keys(store, id.clone())
         >
             <div class="hc-id">
                 <div class="hc-top">
@@ -339,11 +298,8 @@ pub fn all_checks(store: Store) -> Vec<(String, CheckResult)> {
 pub fn ServiceList() -> impl IntoView {
     let store = use_store();
     let checks = Memo::new(move |_| all_checks(store));
-    let empty = move || store.loaded() && checks.with(Vec::is_empty);
     view! {
-        <Show when=empty>
-            <p class="meta">"No services yet. Add them under Settings, Services."</p>
-        </Show>
+        <Show when=move || !checks.with(Vec::is_empty) fallback=move || store.loaded().then(|| view! { <p class="meta">"No services yet. Add them under Settings, Services."</p> })>
         <ul class="svc sheet">
             {move || {
                 checks
@@ -362,11 +318,12 @@ pub fn ServiceList() -> impl IntoView {
                     .collect_view()
             }}
         </ul>
+        </Show>
     }
 }
 
 fn destinations(store: Store, backup: &BackupSchedule) -> impl IntoView + use<> {
-    let ago = move |at: Option<i64>| at.map(|t| format::ago(t as f64, store.clock.get())).unwrap_or_else(|| "not synced yet".to_string());
+    let ago = move |at: Option<i64>| at.map(|t| format::ago(t as f64, store.clock.get())).unwrap_or_default();
     let primary = (!backup.repository.is_empty()).then(|| {
         view! {
             <div class="dest">
@@ -380,18 +337,28 @@ fn destinations(store: Store, backup: &BackupSchedule) -> impl IntoView + use<> 
         .iter()
         .map(|mirror| {
             let (severity, text) = backup_status(mirror.state);
+            let synced = mirror.state != BackupState::Unknown;
             let (finished, message) = (mirror.finished, mirror.message.clone());
-            let detail = move || if message.is_empty() { ago(finished) } else { message.clone() };
+            let detail = move || {
+                if !synced {
+                    "Not synced yet".to_string()
+                } else if message.is_empty() {
+                    ago(finished)
+                } else {
+                    message.clone()
+                }
+            };
             view! {
                 <div class="dest mirror">
                     <span class="tag">{mirror.kind.clone()}</span>
                     <span class="dest-name">{mirror.repository.clone()}</span>
-                    <Pill severity=severity text=text/>
+                    {synced.then(|| view! { <Pill severity=severity text=text/> })}
                     <span class="sub clip" title=mirror.message.clone()>{detail}</span>
                 </div>
             }
         })
         .collect_view();
+    let lonely = (!backup.repository.is_empty() && backup.mirrors.is_empty()).then(|| view! { <div class="dest"><span class="sub">"No mirror"</span></div> });
     let fallback = (backup.repository.is_empty() && backup.mirrors.is_empty() && backup.mirror_state != BackupState::Unknown).then(|| {
         let (severity, text) = backup_status(backup.mirror_state);
         let (finished, message, title) = (backup.mirror_finished, backup.mirror_message.clone(), backup.mirror_message.clone());
@@ -403,7 +370,7 @@ fn destinations(store: Store, backup: &BackupSchedule) -> impl IntoView + use<> 
             </div>
         }
     });
-    view! { <div class="dests">{primary}{mirrors}{fallback}</div> }
+    view! { <div class="dests">{primary}{mirrors}{lonely}{fallback}</div> }
 }
 
 fn backup_row(store: Store, backup: BackupSchedule, stored: bool) -> impl IntoView {
@@ -433,7 +400,7 @@ fn backup_row(store: Store, backup: BackupSchedule, stored: bool) -> impl IntoVi
             <td class="hide-sm">{backup.size.clone()}{added.map(|text| view! { <span class="sub">{text}</span> })}</td>
             {stored.then(|| view! { <td>{destinations(store, &backup)}</td> })}
             <td class="num">
-                <button class="btn small ghost" type="button" aria-label="Remove schedule" title="Remove schedule" on:click=remove>
+                <button class="btn small icon danger" type="button" aria-label="Remove schedule" title="Remove schedule" on:click=remove>
                     <span class="ico" inner_html=icons::TRASH></span>
                 </button>
             </td>

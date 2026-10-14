@@ -34,11 +34,6 @@ pub async fn get<T: DeserializeOwned>(path: &str) -> Result<T, Failure> {
     checked(Request::get(path).send().await).await?.json().await.map_err(failure)
 }
 
-pub async fn post<B: Serialize, T: DeserializeOwned>(path: &str, body: &B) -> Result<T, Failure> {
-    let request = Request::post(path).json(body).map_err(failure)?;
-    checked(request.send().await).await?.json().await.map_err(failure)
-}
-
 pub async fn put<B: Serialize, T: DeserializeOwned>(path: &str, body: &B) -> Result<T, Failure> {
     let request = Request::put(path).json(body).map_err(failure)?;
     checked(request.send().await).await?.json().await.map_err(failure)

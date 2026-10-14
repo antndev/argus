@@ -98,6 +98,7 @@ pub struct Container {
     pub state: String,
     pub status: String,
     pub health: String,
+    pub restart_policy: String,
     pub restarts: u32,
     pub cpu: f64,
     pub memory_bytes: u64,

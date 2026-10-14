@@ -1,7 +1,8 @@
 use argus_model::Severity;
 use leptos::prelude::*;
+use wasm_bindgen::JsCast;
 
-use crate::components::{class, drag_over, drag_start, drop_on, move_keys};
+use crate::components::{class, move_keys};
 use crate::format;
 use crate::icons;
 use crate::pages::HostPage;
@@ -34,6 +35,7 @@ pub fn HostsPage() -> impl IntoView {
             .map(|h| h.info.id)
             .collect::<Vec<_>>()
     });
+    let over = RwSignal::new(None::<String>);
     let item = move |id: String| {
         let lookup = id.clone();
         let host = Memo::new(move |_| store.host(&lookup));
@@ -55,26 +57,15 @@ pub fn HostsPage() -> impl IntoView {
                     .unwrap_or_default()
             })
         };
-        let (target, dragged) = (id.clone(), id.clone());
+        let (target, dragged, hovered, grabbed) = (id.clone(), id.clone(), id.clone(), id.clone());
         let current = move || (selected.get().as_deref() == Some(target.as_str())).then_some("page");
-        let over = RwSignal::new(false);
         view! {
-            <li>
-                <a
-                    class="list-item"
-                    class:drop=move || over.get()
-                    class:dragging=move || store.dragging.with(|d| d.as_deref() == Some(dragged.as_str()))
-                    href=Route::Host(id.clone()).href()
-                    aria-current=current
-                    draggable="true"
-                    aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
-                    on:dragstart=drag_start(store, id.clone())
-                    on:dragend=move |_| store.dragging.set(None)
-                    on:dragover=drag_over(store, over)
-                    on:dragleave=move |_| over.set(false)
-                    on:drop=drop_on(store, id.clone(), over)
-                    on:keydown=move_keys(store, id.clone())
-                >
+            <li
+                data-host=id.clone()
+                class:dragging=move || store.dragging.with(|d| d.as_deref() == Some(dragged.as_str()))
+                class:drop=move || over.with(|o| o.as_deref() == Some(hovered.as_str()))
+            >
+                <a class="list-item" href=Route::Host(id.clone()).href() aria-current=current aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" on:keydown=move_keys(store, id.clone())>
                     <span class=move || format!("tile {}", class(state()))>
                         <span class="ico" inner_html=icons::HOSTS></span>
                     </span>
@@ -83,6 +74,38 @@ pub fn HostsPage() -> impl IntoView {
                         <span class="li-sub">{sub}</span>
                     </span>
                 </a>
+                <span
+                    class="grip"
+                    role="button"
+                    tabindex="-1"
+                    aria-label=format!("Move {id}")
+                    inner_html=icons::GRIP
+                    on:pointerdown=move |ev: leptos::ev::PointerEvent| {
+                        ev.prevent_default();
+                        if let Some(handle) = ev.current_target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) {
+                            let _ = handle.set_pointer_capture(ev.pointer_id());
+                        }
+                        store.dragging.set(Some(grabbed.clone()));
+                    }
+                    on:pointermove=move |ev: leptos::ev::PointerEvent| {
+                        if store.dragging.with_untracked(Option::is_some) {
+                            over.set(host_at(ev.client_x(), ev.client_y()));
+                        }
+                    }
+                    on:pointerup=move |_| {
+                        if let (Some(from), Some(to)) = (store.dragging.get_untracked(), over.get_untracked())
+                            && let Some(at) = store.host_ids().iter().position(|h| *h == to)
+                        {
+                            store.move_host(&from, at);
+                        }
+                        store.dragging.set(None);
+                        over.set(None);
+                    }
+                    on:pointercancel=move |_| {
+                        store.dragging.set(None);
+                        over.set(None);
+                    }
+                ></span>
             </li>
         }
     };
@@ -107,4 +130,8 @@ pub fn HostsPage() -> impl IntoView {
             </section>
         </div>
     }
+}
+
+fn host_at(x: i32, y: i32) -> Option<String> {
+    document().element_from_point(x as f32, y as f32)?.closest("li[data-host]").ok()??.get_attribute("data-host")
 }

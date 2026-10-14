@@ -27,9 +27,6 @@ pub fn AlertsPage() -> impl IntoView {
     });
 
     let clear = move |_| {
-        if !window().confirm_with_message("Clear the alert history on both nodes?").unwrap_or(false) {
-            return;
-        }
         spawn_local(async move {
             match api::send("/api/v1/events/clear", &serde_json::json!({})).await {
                 Ok(()) => store.events.set(Vec::new()),
@@ -65,12 +62,11 @@ pub fn AlertsPage() -> impl IntoView {
                     <button class="link" type="button" on:click=clear>"Clear"</button>
                 </Show>
             </div>
-            <Show when=move || store.events.with(Vec::is_empty)>
-                <p class="meta">"Nothing happened yet."</p>
+            <Show when=move || !store.events.with(Vec::is_empty) fallback=|| view! { <p class="meta">"Nothing happened yet."</p> }>
+                <ol class="history sheet">
+                    <For each=move || store.events.get() key=|event| event.id.clone() children=history_item/>
+                </ol>
             </Show>
-            <ol class="history sheet">
-                <For each=move || store.events.get() key=|event| event.id.clone() children=history_item/>
-            </ol>
         </section>
         <section>
             <div class="sec-head">

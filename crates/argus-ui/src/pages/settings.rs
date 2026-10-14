@@ -1,4 +1,3 @@
-use argus_model::Message;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde_json::{Value, json};
@@ -443,7 +442,7 @@ fn agents(store: Store) -> impl IntoView {
                         fresh.set(Some((id, token)));
                     });
                 }>"New token"</button>
-                <button class="btn small danger" type="button" aria-label=format!("Remove {id}") on:click=move |_| {
+                <button class="btn small icon danger" type="button" aria-label=format!("Remove {id}") on:click=move |_| {
                     write(store, &format!("/shared/agents/{}", escape(&remove)), None);
                     write(store, &format!("/shared/checks/{}", escape(&remove)), None);
                     if fresh.with_untracked(|f| f.as_ref().is_some_and(|(id, _)| *id == remove)) {
@@ -658,7 +657,7 @@ fn rules(store: Store) -> impl IntoView {
         write(store, "/shared/rules", Some(Value::Array(list)));
     };
     view! {
-        <p class="lead">"Metrics are group|item|field, * matches anything. Hosts take patterns and !exclusions. Unreachable hosts, failing checks, RAID, SMART, systemd and reboots always alert."</p>
+        <p class="lead">"Metrics are group|item|field, * matches anything. Hosts take patterns and !exclusions. Unreachable hosts, failing services, stopped containers, RAID, SMART, systemd and reboots always alert."</p>
         <datalist id="metrics">{METRICS.iter().map(|m| view! { <option value=*m></option> }).collect_view()}</datalist>
         <div class="add-row">
             <button class="btn" type="button" on:click=add><span class="ico" inner_html=icons::PLUS></span>"Add rule"</button>
@@ -734,19 +733,22 @@ fn this_device(store: Store) -> impl IntoView {
 fn notifications(store: Store) -> impl IntoView {
     let enabled = move || read(store, "/shared/push").is_some();
     let devices = Memo::new(move |_| len(store, "/shared/push/devices"));
-    let recent = RwSignal::new(Vec::<Message>::new());
-    let period = Memo::new(move |_| (store.clock.get() / 10_000.0).floor() as i64);
-    Effect::new(move |_| {
-        period.track();
-        spawn_local(async move {
-            if let Ok(list) = api::get::<Vec<Message>>("/api/v1/messages").await {
-                let _ = recent.try_set(list);
-            }
-        });
-    });
     let device = move |index: usize| {
         let base = format!("/shared/push/devices/{index}");
-        let (title, added, remove) = (format!("{base}/name"), format!("{base}/added"), base.clone());
+        let (title, added, remove, named) = (format!("{base}/name"), format!("{base}/added"), base.clone(), format!("{base}/name"));
+        let test = move |_| {
+            let name = text(store, &named);
+            spawn_local(async move {
+                if !store.settled().await {
+                    store.notify("Not sent, the settings could not be saved");
+                    return;
+                }
+                match api::send("/api/v1/notify-test", &json!({ "device": name })).await {
+                    Ok(()) => store.notify(format!("Test notification sent to {name}")),
+                    Err(failure) => store.notify(format!("Test failed, {failure}")),
+                }
+            });
+        };
         view! {
             <li class="entry">
                 <span class="tile"><span class="ico" inner_html=icons::ALERTS></span></span>
@@ -757,44 +759,12 @@ fn notifications(store: Store) -> impl IntoView {
                         if at > 0.0 { format!("Added {}", format::ago(at, store.clock.get())) } else { "Added".to_string() }
                     }}</span>
                 </span>
-                <button class="btn small danger" type="button" aria-label="Remove device" on:click=move |_| write(store, &remove, None)>
+                <button class="btn small" type="button" on:click=test>"Test"</button>
+                <button class="btn small icon danger" type="button" aria-label="Remove device" on:click=move |_| write(store, &remove, None)>
                     <span class="ico" inner_html=icons::TRASH></span>
                 </button>
             </li>
         }
-    };
-    let test = move |_| {
-        spawn_local(async move {
-            if !store.settled().await {
-                store.notify("Not sent, the settings could not be saved");
-                return;
-            }
-            match api::post::<_, Value>("/api/v1/notify-test", &json!({})).await {
-                Ok(reply) => store.notify(format!("Test notification {}", reply["result"].as_str().unwrap_or("sent"))),
-                Err(failure) => store.notify(format!("Test failed, {failure}")),
-            }
-        });
-    };
-    let history = move || {
-        recent
-            .get()
-            .into_iter()
-            .map(|message| {
-                let (state, label) = match message.delivered {
-                    Some(at) => ("pill ok", format!("Confirmed after {}", format::duration((at - message.time).max(0) as f64))),
-                    None => ("pill muted", "Not confirmed".to_string()),
-                };
-                view! {
-                    <li class="entry">
-                        <span class="li-text">
-                            <span class="li-title">{message.title.clone()}</span>
-                            <span class="li-sub">{format::ago(message.time as f64, store.clock.get_untracked())}</span>
-                        </span>
-                        <span class=state>{label}</span>
-                    </li>
-                }
-            })
-            .collect_view()
     };
     view! {
         <p class="lead">"Argus encrypts every notification and hands it straight to the push service of your phone, Apple on an iPhone. It only sees encrypted data, the phone decrypts, shows the text and confirms receipt."</p>
@@ -810,14 +780,6 @@ fn notifications(store: Store) -> impl IntoView {
             </ul>
             <Show when=move || devices.get() == 0>
                 <p class="empty-note">"No device yet."</p>
-            </Show>
-            <div class="add-row">
-                <button class="btn" type="button" on:click=test>"Send test notification"</button>
-            </div>
-            {group("Recent notifications")}
-            <ul class="entries">{history}</ul>
-            <Show when=move || recent.with(Vec::is_empty)>
-                <p class="empty-note">"Nothing sent yet."</p>
             </Show>
         </Show>
     }

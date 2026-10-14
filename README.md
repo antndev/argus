@@ -75,7 +75,8 @@ dashboard should not be reachable from the internet, use two names instead (`arg
     report. Commands and file checks only exist in the agent's own config.
   - `rules`: metric thresholds. `metric` is `group|item|field` with `*` as wildcard, `hosts` accepts globs and
     `!exclusions`, `for` is how long the condition must hold. Host unreachable, failing checks, degraded RAID, SMART
-    warnings, failed systemd units and pending reboots always alert.
+    warnings, failed systemd units, pending reboots and containers that stopped although their restart policy is
+    `always` or `unless-stopped` (or report unhealthy) always alert.
   - `push`: the contact address the push services ask for, the key pair (created on the first start), the
     addresses where phones confirm receipt, an optional daily status message and the registered devices.
   - `backup_max_age`, `retention` (every report, 5 minute, hourly and daily averages) and the host `order`.
@@ -152,7 +153,9 @@ services:
 ```
 
 The agent needs root to read Docker's data directory. The node starts it, then gives up root and runs as user 65534,
-so the part that answers on the network never runs as root. `./argus` belongs to 65534. With the host network the
+so the part that answers on the network never runs as root. `./argus` belongs to 65534 with mode 711 and `agent.toml`
+is readable (644): the agent runs as root without capabilities, so it needs the execute bit on the folder to reach its
+config. With the host network the
 node listens on its `listen` address directly; use `127.0.0.1:8090` when the reverse proxy runs on the same host.
 
 Leave `systemd` off in a container. The collector asks the host's D-Bus for failed units, and the default AppArmor

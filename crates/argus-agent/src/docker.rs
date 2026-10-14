@@ -44,6 +44,18 @@ struct Health {
     status: String,
 }
 
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "PascalCase", default)]
+struct Host {
+    restart_policy: Policy,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "PascalCase", default)]
+struct Policy {
+    name: String,
+}
+
 #[derive(Default)]
 pub struct Docker {
     previous: HashMap<String, (u64, Instant)>,
@@ -67,6 +79,11 @@ impl Docker {
                 continue;
             };
             let mut container = container(&stored, now);
+            container.restart_policy = fs::read_to_string(entry.path().join("hostconfig.json"))
+                .ok()
+                .and_then(|text| serde_json::from_str::<Host>(&text).ok())
+                .map(|host| host.restart_policy.name)
+                .unwrap_or_default();
             if stored.state.running {
                 let cgroup = cgroup(root, &stored.id);
                 container.memory_bytes = cgroup.as_deref().and_then(memory_bytes).unwrap_or(0);
@@ -107,6 +124,7 @@ fn container(stored: &Stored, now: i64) -> Container {
         state: name.to_string(),
         status,
         health: state.health.as_ref().map(|h| h.status.clone()).unwrap_or_default(),
+        restart_policy: String::new(),
         restarts: stored.restart_count,
         cpu: 0.0,
         memory_bytes: 0,
@@ -190,6 +208,8 @@ mod tests {
     fn cgroup_files_and_times() {
         assert_eq!(field("usage_usec 1234\nuser_usec 1000\n", "usage_usec"), Some(1234));
         assert_eq!(field("anon 5\ninactive_file 300\n", "inactive_file"), Some(300));
+        let host: Host = serde_json::from_str(r#"{"RestartPolicy":{"Name":"unless-stopped","MaximumRetryCount":0},"Binds":[]}"#).expect("parses");
+        assert_eq!(host.restart_policy.name, "unless-stopped");
         assert_eq!(rfc3339("1970-01-02T00:00:01Z"), Some(86_401));
         assert_eq!(rfc3339("2024-02-29T12:00:00.5Z"), Some(1_709_208_000));
         assert_eq!(rfc3339("0001-01-01T00:00:00Z"), None);

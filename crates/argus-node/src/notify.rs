@@ -235,11 +235,33 @@ pub async fn subscribe(State(app): State<Arc<App>>, Json(subscription): Json<Sub
     }
 }
 
-pub async fn messages(State(app): State<Arc<App>>) -> Json<Vec<Message>> {
-    let mut list = db::messages(&app.db());
-    list.reverse();
-    list.truncate(20);
-    Json(list)
+#[derive(Deserialize)]
+pub struct Test {
+    device: String,
+}
+
+pub async fn test(State(app): State<Arc<App>>, Json(test): Json<Test>) -> Response {
+    let config = app.config();
+    let Some(push) = config.shared.push.clone() else { return (StatusCode::CONFLICT, NO_PUSH).into_response() };
+    let Some(device) = push.devices.iter().find(|d| d.name == test.device).cloned() else {
+        return (StatusCode::NOT_FOUND, "this device is not registered").into_response();
+    };
+    let message = Message {
+        id: random_id(12),
+        time: now_ms(),
+        title: "Test notification".to_string(),
+        message: format!("Sent from the {} node to {}", config.name, device.name),
+        priority: 3,
+        delivered: None,
+    };
+    let body = payload(&message, &push);
+    let sent = tokio::task::spawn_blocking(move || push::send(&push, &device, &body, &message.id, false, now_ms() / 1_000)).await;
+    match sent {
+        Ok(Outcome::Sent) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Outcome::Gone) => (StatusCode::GONE, "the phone ended this subscription, enable it again").into_response(),
+        Ok(Outcome::Failed(error)) => (StatusCode::BAD_GATEWAY, error).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }
 
 #[cfg(test)]

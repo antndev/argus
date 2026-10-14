@@ -1963,15 +1963,6 @@ td .sev {
   max-width: 1280px;
 }
 
-.host-card.dragging {
-  opacity: 0.45;
-}
-
-.host-card.drop {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
-}
-
 .host-card.pending {
   border-style: dashed;
 }
@@ -2102,12 +2093,45 @@ ol.sheet {
   overflow-wrap: anywhere;
 }
 
-.list-item.dragging {
+li[data-host] {
+  display: flex;
+  align-items: center;
+}
+
+li[data-host] > .list-item {
+  flex: 1;
+  min-width: 0;
+}
+
+li[data-host].dragging {
   opacity: 0.45;
 }
 
-.list-item.drop {
+li[data-host].drop > .list-item {
   box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.grip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 28px;
+  height: 40px;
+  color: var(--text-3);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.grip:active {
+  cursor: grabbing;
+}
+
+.btn.icon {
+  width: 28px;
+  padding: 0;
 }
 
 .dests {
