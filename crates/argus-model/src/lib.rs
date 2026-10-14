@@ -329,8 +329,20 @@ pub struct Overview {
     pub node: String,
     pub nodes: Vec<NodeStatus>,
     pub hosts: Vec<HostSummary>,
+    pub services: Vec<ServiceStatus>,
     pub alerts: Vec<Alert>,
     pub backups: Vec<BackupSchedule>,
+}
+
+pub const SERVICE_PREFIX: &str = "service:";
+pub const SERVICES_HOST: &str = "services";
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ServiceStatus {
+    pub check: CheckResult,
+    pub runner: String,
+    pub last_seen: i64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -392,6 +404,16 @@ pub enum CheckKind {
 }
 
 impl CheckKind {
+    pub fn name(&self) -> &'static str {
+        match self {
+            CheckKind::Http { .. } => "http",
+            CheckKind::Tcp { .. } => "tcp",
+            CheckKind::Ping { .. } => "ping",
+            CheckKind::FileAge { .. } => "file_age",
+            CheckKind::Exec { .. } => "exec",
+        }
+    }
+
     pub fn remote(&self) -> bool {
         matches!(self, CheckKind::Http { .. } | CheckKind::Tcp { .. } | CheckKind::Ping { .. })
     }

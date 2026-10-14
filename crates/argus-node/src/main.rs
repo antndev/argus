@@ -18,7 +18,10 @@ use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
-use argus_model::{AlertState, CheckStatus, Event, HostSnapshot, Message, Report, Sample, Severity};
+use argus_model::{
+    Alert, AlertState, CheckResult, CheckStatus, Event, HostSnapshot, Message, Report, SERVICE_PREFIX, SERVICES_HOST, Sample, ServiceStatus, Severity,
+    metric_key,
+};
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post, put};
@@ -44,6 +47,8 @@ pub struct App {
     db: Mutex<Db>,
     pub hosts: RwLock<BTreeMap<String, HostSnapshot>>,
     pub failures: Mutex<HashMap<String, u32>>,
+    pub services: Mutex<BTreeMap<String, ServiceStatus>>,
+    held: Mutex<(i64, Vec<(Alert, bool)>)>,
     pub peer: Mutex<PeerState>,
     wake: Mutex<Option<Sender<()>>>,
     queue: Mutex<Option<Sender<Message>>>,
@@ -76,6 +81,8 @@ impl App {
             db: Mutex::new(db),
             hosts: RwLock::new(hosts),
             failures: Mutex::new(failures),
+            services: Mutex::new(BTreeMap::new()),
+            held: Mutex::new((0, Vec::new())),
             peer: Mutex::new(PeerState { cursor, ..Default::default() }),
             wake: Mutex::new(None),
             queue: Mutex::new(None),
@@ -147,6 +154,10 @@ impl App {
         lock(&self.peer)
     }
 
+    pub fn held(&self) -> MutexGuard<'_, (i64, Vec<(Alert, bool)>)> {
+        lock(&self.held)
+    }
+
     pub fn logins(&self) -> MutexGuard<'_, (i64, u32)> {
         lock(&self.logins)
     }
@@ -193,8 +204,21 @@ impl App {
     pub fn store_report(&self, mut report: Report, now: i64) {
         report.time = now;
         let host = report.host.id.clone();
+        let (standalone, own): (Vec<CheckResult>, Vec<CheckResult>) = report.checks.drain(..).partition(|c| c.name.starts_with(SERVICE_PREFIX));
+        report.checks = own;
         {
             let mut failures = lock(&self.failures);
+            let mut services = lock(&self.services);
+            for mut check in standalone {
+                check.name = check.name.trim_start_matches(SERVICE_PREFIX).to_string();
+                let key = format!("{SERVICES_HOST}|{}", check.name);
+                if check.status == CheckStatus::Failed {
+                    *failures.entry(key).or_default() += 1;
+                } else {
+                    failures.remove(&key);
+                }
+                services.insert(check.name.clone(), ServiceStatus { check, runner: host.clone(), last_seen: now });
+            }
             for check in &report.checks {
                 let key = format!("{host}|{}", check.name);
                 if check.status == CheckStatus::Failed {
@@ -204,7 +228,17 @@ impl App {
                 }
             }
         }
-        let samples: Vec<Sample> = report.metrics.iter().map(|m| Sample { host: host.clone(), key: m.key(), time: now, value: m.value }).collect();
+        let samples: Vec<Sample> = report
+            .metrics
+            .iter()
+            .map(|m| match m.item.strip_prefix(SERVICE_PREFIX) {
+                Some(name) if m.group == "check" => {
+                    Sample { host: SERVICES_HOST.to_string(), key: metric_key("check", name, &m.field), time: now, value: m.value }
+                }
+                _ => Sample { host: host.clone(), key: m.key(), time: now, value: m.value },
+            })
+            .collect();
+        report.metrics.retain(|m| !(m.group == "check" && m.item.starts_with(SERVICE_PREFIX)));
         let snapshot = HostSnapshot { report, last_seen: now };
         {
             let mut db = self.db();
@@ -470,4 +504,18 @@ async fn main() {
     if let Err(error) = axum::serve(listener, router(app)).with_graceful_shutdown(shutdown).await {
         eprintln!("server error: {error}");
     }
+}
+
+pub fn service_runner(app: &App, service: &config::Service, now: i64) -> Option<String> {
+    if let Some(runner) = &service.runner {
+        return Some(runner.clone());
+    }
+    let config = app.config();
+    let snapshots = app.snapshots();
+    let mut candidates: Vec<&HostSnapshot> = snapshots
+        .iter()
+        .filter(|s| s.report.host.site == config.home() && now - s.last_seen < rules::STALE && config.shared.agents.contains_key(&s.report.host.id))
+        .collect();
+    candidates.sort_by_key(|s| (config.shared.order.iter().position(|id| *id == s.report.host.id).unwrap_or(usize::MAX), s.report.host.id.clone()));
+    candidates.first().map(|s| s.report.host.id.clone())
 }

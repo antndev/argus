@@ -22,6 +22,8 @@ const RETRY_DELAYS: [u64; 4] = [0, 2, 10, 60];
 const MAX_PAYLOAD: usize = 3_500;
 const RESEND_AFTER: i64 = 2 * MINUTE;
 const RESEND_WITHIN: i64 = 7 * DAY;
+const BURST: usize = 3;
+const BURST_WINDOW: i64 = 2 * MINUTE;
 
 fn line(alert: &Alert, fired: bool) -> String {
     let subject =
@@ -51,6 +53,38 @@ pub fn compose(changes: &[(Alert, bool)], now: i64) -> Vec<Message> {
             vec![message(format!("{} alert changes", many.len()), text, top)]
         }
     }
+}
+
+pub fn send_changes(app: &App, changes: &[(Alert, bool)], now: i64) -> String {
+    if changes.is_empty() {
+        return String::new();
+    }
+    let recent = db::messages(&app.db()).iter().filter(|m| m.time > now - BURST_WINDOW).count();
+    let mut held = app.held();
+    if recent >= BURST || !held.1.is_empty() {
+        if held.1.is_empty() {
+            held.0 = now;
+        }
+        held.1.extend(changes.iter().cloned());
+        return "held for a summary".to_string();
+    }
+    drop(held);
+    deliver(app, compose(changes, now))
+}
+
+pub fn flush(app: &App, now: i64) {
+    let changes = {
+        let mut held = app.held();
+        if held.1.is_empty() || now - held.0 < BURST_WINDOW {
+            return;
+        }
+        std::mem::take(&mut held.1)
+    };
+    let mut messages = compose(&changes, now);
+    if let Some(summary) = messages.first_mut().filter(|_| changes.len() > 1) {
+        summary.title = format!("{} alert changes in {}", changes.len(), duration_text(BURST_WINDOW));
+    }
+    deliver(app, messages);
 }
 
 pub fn deliver(app: &App, messages: Vec<Message>) -> String {
@@ -280,6 +314,28 @@ mod tests {
         assert!(many[0].message.starts_with("a: x\nResolved, b: x"));
         let node = Alert { host: "vps".into(), rule: "node".into(), title: "vps node unreachable".into(), ..Default::default() };
         assert_eq!(compose(&[(node, true)], 0)[0].title, "vps node unreachable");
+    }
+
+    #[test]
+    fn bursts_over_several_rounds_are_held_and_sent_as_one_summary() {
+        let mut config = crate::config::Config::default();
+        config.shared.push = Some(Push {
+            devices: vec![Device { name: "phone".into(), endpoint: String::new(), p256dh: String::new(), auth: String::new(), added: 0 }],
+            ..Default::default()
+        });
+        let app = App::new(config, db::open(":memory:").expect("db"));
+        let change = |host: &str| vec![(Alert { host: host.into(), title: "down".into(), severity: Severity::Critical, ..Default::default() }, true)];
+        for (round, host) in ["a", "b", "c"].into_iter().enumerate() {
+            assert!(send_changes(&app, &change(host), round as i64 * 1_000).starts_with("sent"));
+        }
+        assert_eq!(send_changes(&app, &change("d"), 4_000), "held for a summary");
+        assert_eq!(send_changes(&app, &change("e"), 5_000), "held for a summary");
+        flush(&app, 5_000);
+        assert_eq!(db::messages(&app.db()).len(), 3);
+        flush(&app, 4_000 + BURST_WINDOW);
+        let last = db::messages(&app.db()).pop().expect("summary");
+        assert_eq!(last.title, "2 alert changes in 2 min");
+        assert!(app.held().1.is_empty());
     }
 
     #[test]

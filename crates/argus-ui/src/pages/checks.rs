@@ -5,7 +5,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::api;
-use crate::components::{Pill, all_checks, check_severity, segmented, uptime_strip};
+use crate::components::{Pill, all_checks, segmented, uptime_strip};
 use crate::format;
 use crate::store::{CheckFilter, use_store};
 
@@ -16,10 +16,10 @@ pub fn ChecksPage() -> impl IntoView {
     let checks = Memo::new(move |_| all_checks(store));
     let names = Memo::new(move |_| {
         let mut by_host: Vec<(String, Vec<String>)> = Vec::new();
-        for (host, check) in checks.get() {
-            match by_host.iter_mut().find(|(h, _)| *h == host) {
-                Some((_, list)) => list.push(check.name),
-                None => by_host.push((host, vec![check.name])),
+        for row in checks.get() {
+            match by_host.iter_mut().find(|(h, _)| *h == row.host) {
+                Some((_, list)) => list.push(row.check.name),
+                None => by_host.push((row.host, vec![row.check.name])),
             }
         }
         by_host
@@ -50,15 +50,23 @@ pub fn ChecksPage() -> impl IntoView {
         checks
             .get()
             .into_iter()
-            .filter(|(_, check)| filter == CheckFilter::All || check.status != CheckStatus::Ok)
-            .map(|(host, check)| {
-                let strip = history.with(|map| map.get(&(host.clone(), check.name.clone())).cloned());
+            .filter(|row| filter == CheckFilter::All || row.waiting || row.check.status != CheckStatus::Ok)
+            .map(|row| {
+                let strip = history.with(|map| map.get(&(row.host.clone(), row.check.name.clone())).cloned());
+                let runs = if row.standalone() {
+                    let via = if row.runner.is_empty() { "no agent yet".to_string() } else { format!("via {}", row.runner) };
+                    view! { <span>"Standalone"</span><span class="sub">{via}</span> }.into_any()
+                } else {
+                    view! { <a class="link" href=crate::route::Route::Host(row.host.clone()).href()>{row.host.clone()}</a> }.into_any()
+                };
+                let severity = row.severity();
+                let check = row.check;
                 view! {
                     <tr>
-                        <td><Pill severity=check_severity(check.status)/></td>
+                        <td><Pill severity=severity/></td>
                         <td><span class="check-name">{check.name.clone()}</span><span class="sub mono clip" title=check.target.clone()>{check.target.clone()}</span></td>
                         <td class="hide-sm"><span class="tag">{check.kind.clone()}</span></td>
-                        <td><a class="link" href=crate::route::Route::Host(host.clone()).href()>{host.clone()}</a></td>
+                        <td>{runs}</td>
                         <td><span class="msg" title=check.message.clone()>{check.message.clone()}</span></td>
                         <td>{uptime_strip(strip)}</td>
                         <td class="num">{check.latency_ms.map(format::latency).unwrap_or_default()}</td>

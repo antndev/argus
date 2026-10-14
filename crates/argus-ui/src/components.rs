@@ -1,4 +1,4 @@
-use argus_model::{Alert, BackupSchedule, BackupState, CheckResult, CheckStatus, HostSummary, SeriesData, Severity, metric_key};
+use argus_model::{Alert, BackupSchedule, BackupState, CheckResult, CheckStatus, HostSummary, SERVICES_HOST, SeriesData, Severity, metric_key};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
@@ -275,7 +275,7 @@ fn alert_row(store: Store, alert: Alert, link: bool) -> impl IntoView {
         <div class=format!("alert-row {}", class(alert.severity))>
             {sev_icon(alert.severity)}
             <div class="ar-body">
-                <div><span class="ar-host">{if alert.host == "zerobyte" { "ZeroByte".to_string() } else { alert.host.clone() }}</span>{alert.title.clone()}</div>
+                <div><span class="ar-host">{match alert.host.as_str() { "zerobyte" => "ZeroByte".to_string(), SERVICES_HOST => "Service".to_string(), host => host.to_string() }}</span>{alert.title.clone()}</div>
                 {(!detail.is_empty()).then(|| view! { <div class="ar-detail" title=full>{detail}</div> })}
                 <div class="ar-meta">{age}</div>
             </div>
@@ -290,8 +290,36 @@ pub fn Toast() -> impl IntoView {
     move || store.toast.get().map(|(_, message)| view! { <div class="toast" role="status">{message}</div> })
 }
 
-pub fn all_checks(store: Store) -> Vec<(String, CheckResult)> {
-    store.hosts().into_iter().flat_map(|h| h.checks.into_iter().map(move |c| (h.info.id.clone(), c))).collect()
+#[derive(Clone, Debug, PartialEq)]
+pub struct ServiceRow {
+    pub host: String,
+    pub runner: String,
+    pub check: CheckResult,
+    pub waiting: bool,
+}
+
+impl ServiceRow {
+    pub fn standalone(&self) -> bool {
+        self.host == SERVICES_HOST
+    }
+
+    pub fn severity(&self) -> Severity {
+        if self.waiting { Severity::Muted } else { check_severity(self.check.status) }
+    }
+}
+
+pub fn all_checks(store: Store) -> Vec<ServiceRow> {
+    let standalone = store.overview.with(|o| o.as_ref().map(|o| o.services.clone()).unwrap_or_default()).into_iter().map(|s| ServiceRow {
+        host: SERVICES_HOST.to_string(),
+        runner: s.runner,
+        waiting: s.last_seen == 0,
+        check: s.check,
+    });
+    let hosted = store
+        .hosts()
+        .into_iter()
+        .flat_map(|h| h.checks.into_iter().map(move |check| ServiceRow { host: h.info.id.clone(), runner: h.info.id.clone(), check, waiting: false }));
+    standalone.chain(hosted).collect()
 }
 
 #[component]
@@ -305,10 +333,12 @@ pub fn ServiceList() -> impl IntoView {
                 checks
                     .get()
                     .into_iter()
-                    .map(|(host, check)| {
+                    .map(|row| {
+                        let severity = row.severity();
+                        let check = row.check;
                         view! {
-                            <li title=format!("{} on {host}", check.message)>
-                                {sev_icon(check_severity(check.status))}
+                            <li title=format!("{} on {}", check.message, row.runner)>
+                                {sev_icon(severity)}
                                 <span class="svc-name">{check.name.clone()}</span>
                                 <span class="tag">{check.kind.clone()}</span>
                                 <span class="svc-result">{check.latency_ms.map(format::latency).unwrap_or_default()}</span>

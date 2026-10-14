@@ -496,8 +496,7 @@ fn check_template(kind: &str, name: String) -> Value {
     }
 }
 
-fn check_card(store: Store, host: String, index: usize) -> impl IntoView {
-    let base = format!("/shared/checks/{}/{index}", escape(&host));
+fn check_card(store: Store, base: String, runner: Option<Memo<Vec<String>>>) -> impl IntoView {
     let kind_path = format!("{base}/type");
     let kind = Memo::new(move |_| text(store, &kind_path));
     let (retype, remove, name) = (base.clone(), base.clone(), base.clone());
@@ -537,6 +536,18 @@ fn check_card(store: Store, host: String, index: usize) -> impl IntoView {
                     </select>
                 })}
                 {fields}
+                {runner.map(|agents| {
+                    let (shown, path) = (format!("{remove}/runner"), format!("{remove}/runner"));
+                    field("Run by", view! {
+                        <select class="input" prop:value=move || text(store, &shown) on:change=move |ev| {
+                            let value = event_target_value(&ev);
+                            write(store, &path, (!value.is_empty()).then(|| json!(value)));
+                        }>
+                            <option value="">"Any home agent"</option>
+                            {move || agents.get().into_iter().map(|id| view! { <option value=id.clone()>{id.clone()}</option> }).collect_view()}
+                        </select>
+                    })
+                })}
             </div>
             <button class="btn small danger card-remove" type="button" aria-label="Remove service" on:click=move |_| write(store, &remove, None)>
                 <span class="ico" inner_html=icons::TRASH></span>
@@ -548,11 +559,12 @@ fn check_card(store: Store, host: String, index: usize) -> impl IntoView {
 fn checks(store: Store) -> impl IntoView {
     let hosts = Memo::new(move |_| keys(store, "/shared/agents"));
     let used = Memo::new(move |_| hosts.get().into_iter().filter(|host| len(store, &format!("/shared/checks/{}", escape(host))) > 0).collect::<Vec<_>>());
+    let standalone = Memo::new(move |_| len(store, "/shared/services"));
+    let has_standalone = move || standalone.get() != 0;
     let chosen = RwSignal::new(String::new());
     let add = move |_| {
-        let host = Some(chosen.get_untracked()).filter(|h| !h.is_empty()).or_else(|| hosts.with_untracked(|h| h.first().cloned()));
-        let Some(host) = host else { return };
-        let path = format!("/shared/checks/{}", escape(&host));
+        let host = chosen.get_untracked();
+        let path = if host.is_empty() { "/shared/services".to_string() } else { format!("/shared/checks/{}", escape(&host)) };
         let mut list = read(store, &path).and_then(|v| v.as_array().cloned()).unwrap_or_default();
         list.push(check_template("http", format!("Service {}", list.len() + 1)));
         write(store, &path, Some(Value::Array(list)));
@@ -564,22 +576,29 @@ fn checks(store: Store) -> impl IntoView {
         view! {
             <section class="block">
                 <h3 class="group-head">{format!("Run by {host}")}</h3>
-                <For each=move || 0..count.get() key=|i| *i children=move |i| check_card(store, card_host.clone(), i)/>
+                <For each=move || 0..count.get() key=|i| *i children=move |i| check_card(store, format!("/shared/checks/{}/{i}", escape(&card_host)), None)/>
             </section>
         }
     };
     view! {
-        <p class="lead">"HTTP, TCP and ping checks are sent to the agent that runs them with its next report. Commands and file checks stay in the agent's own config, the node can never start a program on a host."</p>
+        <p class="lead">"HTTP, TCP and ping checks are sent to the agent that runs them with its next report. A standalone service belongs to no host, like a camera without an agent: any home agent runs it unless you pick one, and it shows and alerts on its own. Commands and file checks stay in the agent's own config, the node can never start a program on a host."</p>
         <Show when=move || hosts.with(|h| !h.is_empty()) fallback=|| view! { <p class="empty-note">"Add a host under Hosts and agents first."</p> }>
             <div class="add-row">
-                <select class="input" aria-label="Host that runs the service" prop:value=move || Some(chosen.get()).filter(|c| !c.is_empty()).or_else(|| hosts.with(|h| h.first().cloned())).unwrap_or_default() on:change=move |ev| chosen.set(event_target_value(&ev))>
-                    {move || hosts.get().into_iter().map(|host| view! { <option value=host.clone()>{format!("Run by {host}")}</option> }).collect_view()}
+                <select class="input" aria-label="Where the service belongs" prop:value=move || chosen.get() on:change=move |ev| chosen.set(event_target_value(&ev))>
+                    <option value="">"Standalone service"</option>
+                    {move || hosts.get().into_iter().map(|host| view! { <option value=host.clone()>{format!("Part of {host}")}</option> }).collect_view()}
                 </select>
                 <button class="btn" type="button" on:click=add><span class="ico" inner_html=icons::PLUS></span>"Add service"</button>
             </div>
         </Show>
+        <Show when=has_standalone>
+            <section class="block">
+                <h3 class="group-head">"Standalone"</h3>
+                <For each=move || 0..standalone.get() key=|i| *i children=move |i| check_card(store, format!("/shared/services/{i}"), Some(hosts))/>
+            </section>
+        </Show>
         <For each=move || used.get() key=|h| h.clone() children=host_block/>
-        <Show when=move || hosts.with(|h| !h.is_empty()) && used.with(Vec::is_empty)>
+        <Show when=move || hosts.with(|h| !h.is_empty()) && used.with(Vec::is_empty) && standalone.get() == 0>
             <p class="empty-note">"No central services yet."</p>
         </Show>
     }

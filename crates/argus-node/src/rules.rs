@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use argus_model::{Alert, AlertState, BackupSchedule, BackupState, CheckStatus, Event, HostSnapshot, Limit, Metric, RuleInfo, Severity};
+use argus_model::{Alert, AlertState, BackupSchedule, BackupState, CheckStatus, Event, HostSnapshot, Limit, Metric, RuleInfo, SERVICES_HOST, Severity};
 
 use crate::config::Rule;
 use crate::util::{MINUTE, SECOND, duration_text, glob, matches_hosts, random_id};
@@ -87,6 +87,35 @@ fn metric_conditions(app: &App, snapshot: &HostSnapshot) -> Vec<Condition> {
             condition.hold = rule.hold.0;
             conditions.push(condition);
         }
+    }
+    conditions
+}
+
+fn service_conditions(app: &App, now: i64, active: &HashMap<String, Alert>) -> Vec<Condition> {
+    let config = app.config();
+    let known = app.services.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    let failures = app.failures.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    let mut conditions = Vec::new();
+    for service in &config.shared.services {
+        let name = &service.check.name;
+        let Some(status) = known.get(name).filter(|s| now - s.last_seen < 3 * MINUTE) else {
+            if now - app.started >= 3 * MINUTE {
+                let detail = known
+                    .get(name)
+                    .map_or("No agent has run it yet".to_string(), |s| format!("Last run by {} {} ago", s.runner, duration_text(now - s.last_seen)));
+                conditions.push(Condition::new(SERVICES_HOST, "check", name, Severity::Critical, format!("{name} not checked"), detail));
+            }
+            continue;
+        };
+        let failed = failures.get(&format!("{SERVICES_HOST}|{name}")).copied().unwrap_or(0);
+        let ongoing = active.get(&format!("{SERVICES_HOST}|check|{name}"));
+        let (severity, title) = match (status.check.status, ongoing) {
+            (CheckStatus::Failed, _) if failed >= CHECK_FAILURES => (Severity::Critical, format!("{name} failing")),
+            (CheckStatus::Failed, Some(alert)) => (alert.severity, alert.title.clone()),
+            (CheckStatus::Warning, _) => (Severity::Warning, format!("{name} degraded")),
+            _ => continue,
+        };
+        conditions.push(Condition::new(SERVICES_HOST, "check", name, severity, title, status.check.message.clone()));
     }
     conditions
 }
@@ -211,6 +240,7 @@ fn backup_conditions(app: &App, now: i64, schedules: Vec<BackupSchedule>) -> Vec
 }
 
 pub fn evaluate(app: &App, now: i64) {
+    notify::flush(app, now);
     let peer_down = app.peer_down(now);
     if app.config().peer.is_some() && app.peer_state().last_sync.is_none() && !peer_down {
         return;
@@ -273,6 +303,10 @@ pub fn evaluate(app: &App, now: i64) {
     }
     let has_backups = config.zerobyte.is_some() || !schedules.is_empty();
     let owns_backups = config.peer.is_none() || config.initiates_sync() || peer_down;
+    if owns_backups && !config.shared.services.is_empty() {
+        hosts_in_scope.insert(SERVICES_HOST.to_string());
+        conditions.extend(service_conditions(app, now, &active));
+    }
     if has_backups && owns_backups {
         hosts_in_scope.insert(BACKUP_HOST.to_string());
         conditions.extend(backup_conditions(app, now, schedules));
@@ -360,7 +394,7 @@ fn reconcile(app: &App, now: i64, conditions: Vec<Condition>, hosts: &HashSet<St
         }
     }
     changes.sort_by_key(|(alert, _)| rank(alert));
-    let note = notify::deliver(app, notify::compose(&changes, now));
+    let note = notify::send_changes(app, &changes, now);
     let db = app.db();
     for (alert, fired) in transitions {
         let note = if changes.iter().any(|(a, f)| a.key == alert.key && *f == fired) { note.clone() } else { "nothing sent".to_string() };
@@ -573,6 +607,36 @@ mod tests {
         let all = alerts(&app);
         assert_eq!(all["v|Disk|/"].state, AlertState::Firing);
         assert_eq!(all["vps|node|"].state, AlertState::Firing);
+    }
+
+    #[test]
+    fn standalone_services_run_on_a_home_agent_but_alert_on_their_own() {
+        let mut config = config(false);
+        config.shared.agents = [("a".to_string(), "x".to_string()), ("b".to_string(), "y".to_string())].into();
+        config.shared.order = vec!["b".into(), "a".into()];
+        config.shared.services =
+            vec![crate::config::Service { check: serde_json::from_str(r#"{"name":"Allsky","type":"ping","host":"10.0.0.72"}"#).expect("check"), runner: None }];
+        let app = App::new(config, db::open(":memory:").expect("db"));
+        app.store_report(report("a", "home", Vec::new()), 0);
+        app.store_report(report("b", "home", Vec::new()), 0);
+        let service = app.config().shared.services[0].clone();
+        assert_eq!(crate::service_runner(&app, &service, 0).as_deref(), Some("b"));
+        let mut run = report("b", "home", vec![Metric::new("check", "service:Allsky", "ok", 0.0)]);
+        run.checks = vec![
+            CheckResult { name: "service:Allsky".into(), status: CheckStatus::Failed, message: "Timed out".into(), ..Default::default() },
+            CheckResult { name: "Web".into(), ..Default::default() },
+        ];
+        for minute in 0..3 {
+            app.store_report(run.clone(), minute * MINUTE);
+        }
+        let host = app.snapshots().into_iter().find(|s| s.report.host.id == "b").expect("host");
+        assert_eq!(host.report.checks.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["Web"]);
+        assert!(host.report.metrics.is_empty());
+        assert_eq!(db::samples_since(&app.db(), &[SERVICES_HOST.into()], -1, 10).len(), 3);
+        evaluate(&app, 2 * MINUTE);
+        let alert = &alerts(&app)["services|check|Allsky"];
+        assert_eq!((alert.severity, alert.title.as_str()), (Severity::Critical, "Allsky failing"));
+        assert!(!alerts(&app).keys().any(|k| k.starts_with("b|")));
     }
 
     #[test]

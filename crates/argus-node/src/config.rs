@@ -62,6 +62,8 @@ pub struct Shared {
     pub agents: BTreeMap<String, String>,
     #[serde(default)]
     pub checks: BTreeMap<String, Vec<Check>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub services: Vec<Service>,
     #[serde(default = "default_rules")]
     pub rules: Vec<Rule>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -74,12 +76,21 @@ pub struct Shared {
     pub retention: Retention,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Service {
+    #[serde(flatten)]
+    pub check: Check,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runner: Option<String>,
+}
+
 impl Default for Shared {
     fn default() -> Self {
         Self {
             revision: 0,
             agents: BTreeMap::new(),
             checks: BTreeMap::new(),
+            services: Vec::new(),
             rules: default_rules(),
             push: None,
             order: Vec::new(),
@@ -276,6 +287,9 @@ impl Config {
             }
         }
         let shared = &self.shared;
+        if shared.agents.contains_key(argus_model::SERVICES_HOST) {
+            return Err(format!("the host id {:?} is reserved for standalone services", argus_model::SERVICES_HOST));
+        }
         if let Some(host) = shared.agents.keys().find(|host| !plain_name(host)) {
             return Err(format!("host id {host:?} needs letters, digits, dash, dot or underscore"));
         }
@@ -294,6 +308,22 @@ impl Config {
                 if check.kind.timeout().is_some_and(|t| t < Duration::from_secs(1)) {
                     return Err(format!("check {:?} on {host} needs a timeout of at least 1 s", check.name));
                 }
+            }
+        }
+        let mut names = HashSet::new();
+        for service in &shared.services {
+            let check = &service.check;
+            if check.name.trim().is_empty() || check.name.contains(',') || !names.insert(check.name.as_str()) {
+                return Err("services need unique, non-empty names without commas".into());
+            }
+            if !check.kind.remote() {
+                return Err(format!("service {:?}: only http, tcp and ping checks can come from the node", check.name));
+            }
+            if check.kind.timeout().is_some_and(|t| t < Duration::from_secs(1)) {
+                return Err(format!("service {:?} needs a timeout of at least 1 s", check.name));
+            }
+            if service.runner.as_ref().is_some_and(|runner| !shared.agents.contains_key(runner)) {
+                return Err(format!("service {:?} runs on an agent that does not exist", check.name));
             }
         }
         for rule in &shared.rules {
@@ -383,6 +413,13 @@ impl Config {
 
     pub fn initiates_sync(&self) -> bool {
         self.peer.as_ref().is_some_and(|p| p.url.is_some())
+    }
+
+    pub fn home(&self) -> &str {
+        match &self.peer {
+            Some(peer) if peer.url.is_none() => &peer.name,
+            _ => &self.name,
+        }
     }
 }
 

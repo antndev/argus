@@ -42,6 +42,13 @@
         }
       ]
     },
+    "services": [
+      {
+        "name": "Camera",
+        "type": "ping",
+        "host": "192.0.2.50"
+      }
+    ],
     "rules": [
       {
         "name": "CPU",

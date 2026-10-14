@@ -254,7 +254,7 @@ fn Sidebar() -> impl IntoView {
                     (down > 0).then(|| (down.to_string(), true))
                 })}
                 {nav_item("checks", "Services", "#/services", icons::CHECKS, move || {
-                    let failing = crate::components::all_checks(store).iter().filter(|(_, c)| c.status != argus_model::CheckStatus::Ok).count();
+                    let failing = crate::components::all_checks(store).iter().filter(|row| !row.waiting && row.check.status != argus_model::CheckStatus::Ok).count();
                     (failing > 0).then(|| (failing.to_string(), true))
                 })}
                 {nav_item("alerts", "Alerts", "#/alerts", icons::ALERTS, move || {

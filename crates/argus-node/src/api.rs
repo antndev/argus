@@ -1,7 +1,10 @@
 use std::io::Read;
 use std::sync::Arc;
 
-use argus_model::{Alert, AlertState, BackupSchedule, Event, HostInfo, HostSummary, IngestReply, NodeStatus, Overview, Report, RuleInfo, SeriesData, Severity};
+use argus_model::{
+    Alert, AlertState, BackupSchedule, Check, CheckResult, Event, HostInfo, HostSummary, IngestReply, NodeStatus, Overview, Report, RuleInfo, SERVICE_PREFIX,
+    SeriesData, ServiceStatus, Severity,
+};
 use axum::Json;
 use axum::extract::{Query, Request, State};
 use axum::http::{StatusCode, header};
@@ -56,7 +59,17 @@ pub async fn ingest(State(app): State<Arc<App>>, request: Request) -> Response {
             .into_response();
     }
     app.store_report(report, now_ms());
-    Json(IngestReply { checks: config.shared.checks.get(&host).cloned().unwrap_or_default() }).into_response()
+    let now = now_ms();
+    let mut checks = config.shared.checks.get(&host).cloned().unwrap_or_default();
+    checks.extend(
+        config
+            .shared
+            .services
+            .iter()
+            .filter(|service| crate::service_runner(&app, service, now).as_deref() == Some(host.as_str()))
+            .map(|service| Check { name: format!("{SERVICE_PREFIX}{}", service.check.name), ..service.check.clone() }),
+    );
+    Json(IngestReply { checks }).into_response()
 }
 
 fn host_state(alerts: &[Alert], host: &str) -> Severity {
@@ -118,7 +131,19 @@ pub async fn overview(State(app): State<Arc<App>>) -> Json<Overview> {
             last_sync: app.peer_state().last_sync,
         });
     }
-    Json(Overview { now, node: config.name.clone(), nodes, hosts, alerts, backups })
+    let known = app.services.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    let services = config
+        .shared
+        .services
+        .iter()
+        .map(|service| {
+            known.get(&service.check.name).cloned().unwrap_or_else(|| ServiceStatus {
+                check: CheckResult { name: service.check.name.clone(), kind: service.check.kind.name().to_string(), ..Default::default() },
+                ..Default::default()
+            })
+        })
+        .collect();
+    Json(Overview { now, node: config.name.clone(), nodes, hosts, services, alerts, backups })
 }
 
 #[derive(Deserialize)]
