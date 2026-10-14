@@ -8,8 +8,6 @@ on:
   push:
     branches:
       - main
-    tags:
-      - "v*"
     paths:
       - ".github/workflows/publish-images.yml"
       - ".dockerignore"
@@ -28,10 +26,11 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  REGISTRY: ghcr.io/${{ github.repository_owner }}
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Check out repository
@@ -43,6 +42,9 @@ jobs:
           targets: wasm32-unknown-unknown
           components: clippy
 
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+
       - name: Run tests
         run: cargo test --locked --workspace --exclude argus-ui
 
@@ -52,10 +54,9 @@ jobs:
       - name: Lint dashboard
         run: cargo clippy --locked -p argus-ui --target wasm32-unknown-unknown -- -D warnings
 
-  publish:
-    needs: test
+  build:
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
 
     strategy:
       fail-fast: false
@@ -64,33 +65,128 @@ jobs:
           - image: argus-node
             file: docker/node.Dockerfile
             context: .
-            platforms: linux/amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
           - image: argus-agent
             file: docker/agent.Dockerfile
             context: .
-            platforms: linux/amd64,linux/arm64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - image: argus-agent
+            file: docker/agent.Dockerfile
+            context: .
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
           - image: argus-agent-freebsd
             file: docker/agent-freebsd.Dockerfile
             context: out
-            platforms: linux/amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Name the platform
+        run: |
+          platform="${{ matrix.platform }}"
+          echo "PLATFORM_PAIR=${platform//\//-}" >> "$GITHUB_ENV"
+
+      - name: Cache Rust build
+        if: matrix.image == 'argus-agent-freebsd'
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: freebsd
+
+      - name: Install cross
+        if: matrix.image == 'argus-agent-freebsd'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+
       - name: Build FreeBSD agent
         if: matrix.image == 'argus-agent-freebsd'
         run: |
-          cargo install cross --locked
           cross build --release --locked -p argus-agent --target x86_64-unknown-freebsd
           mkdir out && cp target/x86_64-unknown-freebsd/release/argus-agent out/argus-agent
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ matrix.image }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          platforms: ${{ matrix.platform }}
+          pull: true
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.image }}-${{ env.PLATFORM_PAIR }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}-${{ env.PLATFORM_PAIR }}
+
+      - name: Export digest
+        run: |
+          mkdir -p "${{ runner.temp }}/digests"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.image }}-${{ env.PLATFORM_PAIR }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: [test, build]
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.test.result == 'success' }}
+    runs-on: ubuntu-24.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: argus-node
+            platforms: 1
+          - image: argus-agent
+            platforms: 2
+          - image: argus-agent-freebsd
+            platforms: 1
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
 
       - name: Read version
         id: version
         run: echo "value=$(grep -m1 '^version' Cargo.toml | cut -d '"' -f2)" >> "$GITHUB_OUTPUT"
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-${{ matrix.image }}-*
+          merge-multiple: true
+
+      - name: Require every platform
+        working-directory: ${{ runner.temp }}/digests
+        run: test "$(ls | wc -l)" -eq "${{ matrix.platforms }}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -106,25 +202,20 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+          images: ${{ env.REGISTRY }}/${{ matrix.image }}
           flavor: |
             latest=false
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=raw,value=${{ steps.version.outputs.value }},enable={{is_default_branch}}
             type=ref,event=branch
-            type=ref,event=tag
             type=sha
 
-      - name: Build and push ${{ matrix.image }} image
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.file }}
-          platforms: ${{ matrix.platforms }}
-          pull: true
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.image }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+      - name: Create the multi-platform image
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.REGISTRY }}/${{ matrix.image }}@sha256:%s ' *)
+
+      - name: Inspect the image
+        run: docker buildx imagetools inspect "${{ env.REGISTRY }}/${{ matrix.image }}:${{ steps.meta.outputs.version }}"
