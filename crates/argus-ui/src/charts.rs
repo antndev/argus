@@ -19,6 +19,9 @@ extern "C" {
 
     #[wasm_bindgen(catch, js_namespace = argusCharts, js_name = destroy)]
     fn js_destroy(id: u32) -> Result<(), JsValue>;
+
+    #[wasm_bindgen(catch, js_namespace = argusCharts, js_name = isolate)]
+    fn js_isolate(id: u32, index: usize) -> Result<String, JsValue>;
 }
 
 const VIEWS: &[(bool, &str)] = &[(false, "Containers"), (true, "Each container")];
@@ -141,8 +144,9 @@ pub fn Chart(spec: ChartSpec) -> impl IntoView {
     let node = NodeRef::<html::Div>::new();
     let handle = StoredValue::new(None::<u32>);
     let request = StoredValue::new(0u32);
-    let shown = StoredValue::new(None::<Range>);
+    let ranged = StoredValue::new(None::<Range>);
     let latest = RwSignal::new(Vec::<Option<f64>>::new());
+    let shown = RwSignal::new(Vec::<bool>::new());
     let tick = Memo::new(move |_| (store.clock.get() / 30_000.0).floor() as i64);
     let unit = spec.unit;
     let title = spec.title.clone();
@@ -164,6 +168,7 @@ pub fn Chart(spec: ChartSpec) -> impl IntoView {
                 let _ = js_destroy(id);
                 handle.set_value(None);
             }
+            shown.set(Vec::new());
         }
         let url = active.url(range);
         let json = active.to_json();
@@ -183,8 +188,8 @@ pub fn Chart(spec: ChartSpec) -> impl IntoView {
             let values = data.values.iter().map(|column| column.iter().rev().find_map(|v| *v)).collect();
             latest.set(values);
             let payload = serde_json::to_string(&data).unwrap_or_default();
-            let animate = shown.get_value().is_some_and(|previous| previous != range);
-            shown.set_value(Some(range));
+            let animate = ranged.get_value().is_some_and(|previous| previous != range);
+            ranged.set_value(Some(range));
             match handle.get_value() {
                 Some(id) => {
                     let _ = js_update(id, &payload, animate);
@@ -212,12 +217,20 @@ pub fn Chart(spec: ChartSpec) -> impl IntoView {
             .enumerate()
             .map(|(index, (label, _, _))| {
                 let value = move || latest.with(|v| v.get(index).copied().flatten().map(|x| unit.format(x)).unwrap_or_default());
+                let off = move || shown.with(|s| s.get(index).is_some_and(|show| !show));
+                let pick = move |_| {
+                    if let Some(id) = handle.get_value()
+                        && let Ok(json) = js_isolate(id, index)
+                    {
+                        shown.set(serde_json::from_str(&json).unwrap_or_default());
+                    }
+                };
                 view! {
-                    <span>
+                    <button type="button" class:off=off on:click=pick title="Show only this, click again for all">
                         <i style=format!("background:var(--s{})", index % 8 + 1)></i>
                         {label}
                         <b>{value}</b>
-                    </span>
+                    </button>
                 }
             })
             .collect_view()

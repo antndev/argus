@@ -99,13 +99,24 @@ window.argusCharts = (() => {
             tip.hidden = true;
             return;
           }
-          const rows = spec.series
-            .map((label, j) => {
-              const value = u.data[j + 1][i];
-              return `<div class="chart-tip-row"><i style="background:${colors[j]}"></i><span>${escape(label)}</span><b>${value == null ? "n/a" : format(value)}</b></div>`;
-            })
-            .join("");
-          tip.innerHTML = `<div class="chart-tip-time">${stamp(u.data[0][i])}</div>${rows}`;
+          let nearest = -1;
+          let distance = Infinity;
+          spec.series.forEach((_, j) => {
+            const value = u.data[j + 1][i];
+            if (value == null || !u.series[j + 1].show) return;
+            const gap = Math.abs(u.valToPos(value, "y") - u.cursor.top);
+            if (gap < distance) {
+              distance = gap;
+              nearest = j;
+            }
+          });
+          if (nearest < 0) {
+            tip.hidden = true;
+            return;
+          }
+          const value = u.data[nearest + 1][i];
+          const row = `<div class="chart-tip-row"><i style="background:${colors[nearest]}"></i><span>${escape(spec.series[nearest])}</span><b>${format(value)}</b></div>`;
+          tip.innerHTML = `<div class="chart-tip-time">${stamp(u.data[0][i])}</div>${row}`;
           tip.hidden = false;
           const width = u.over.clientWidth;
           const height = u.over.clientHeight;
@@ -129,10 +140,11 @@ window.argusCharts = (() => {
       height: element.clientHeight || 180,
       padding: [10, 8, 0, 0],
       legend: { show: false },
-      select: { show: false },
+      focus: { alpha: 0.25 },
       cursor: {
         y: false,
-        drag: { x: false, y: false, setScale: false },
+        focus: { prox: 24 },
+        drag: { x: true, y: false, setScale: true },
         points: { size: 8, width: 2, stroke: () => surface, fill: (u, i) => colors[i - 1] },
       },
       scales: { x: { time: true }, y: { range: (u, low, high) => yRange(spec, low, high) } },
@@ -150,13 +162,25 @@ window.argusCharts = (() => {
           points: { show: false },
         })),
       ],
-      hooks: { draw: [(u) => drawThresholds(u, spec)] },
+      hooks: {
+        draw: [(u) => drawThresholds(u, spec)],
+        setSelect: [
+          (u) => {
+            if (u.select.width > 0) entry.zoomed = true;
+          },
+        ],
+      },
       plugins: [tooltip(spec, colors)],
     };
   }
 
   function mount(entry, animate) {
     entry.plot = new uPlot(options(entry), entry.data, entry.element);
+    entry.zoomed = false;
+    entry.plot.over.addEventListener("dblclick", () => {
+      entry.zoomed = false;
+    });
+    (entry.shown || []).forEach((show, j) => entry.plot.setSeries(j + 1, { show }));
     if (!animate) entry.plot.root.classList.add("no-anim");
   }
 
@@ -183,7 +207,7 @@ window.argusCharts = (() => {
     const entry = charts.get(id);
     if (!entry) return;
     entry.data = columns(dataJson);
-    entry.plot.setData(entry.data);
+    entry.plot.setData(entry.data, !entry.zoomed);
     if (animate && !reducedMotion()) {
       entry.plot.root.animate([{ opacity: 0.15, transform: "translateY(4px)" }, { opacity: 1, transform: "none" }], { duration: 360, easing: "cubic-bezier(.2,.9,.3,1)" });
     }
@@ -207,5 +231,15 @@ window.argusCharts = (() => {
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", retheme);
   new MutationObserver(retheme).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 
-  return { create, update, destroy };
+  function isolate(id, index) {
+    const entry = charts.get(id);
+    if (!entry) return "[]";
+    const series = entry.plot.series.slice(1);
+    const alone = series[index].show && series.every((s, j) => j === index || !s.show);
+    entry.shown = series.map((_, j) => alone || j === index);
+    entry.shown.forEach((show, j) => entry.plot.setSeries(j + 1, { show }));
+    return JSON.stringify(entry.shown);
+  }
+
+  return { create, update, destroy, isolate };
 })();

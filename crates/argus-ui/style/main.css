@@ -1090,18 +1090,36 @@ td .sev {
 
 .legend {
   display: flex;
-  flex-wrap: wrap;
   gap: 4px 16px;
   font-size: 12px;
   color: var(--text-2);
   margin: 8px 0 6px;
   min-height: 18px;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 
-.legend span {
+.legend::-webkit-scrollbar {
+  display: none;
+}
+
+.legend button {
   display: inline-flex;
   align-items: center;
+  flex: none;
   white-space: nowrap;
+  color: inherit;
+  transition: opacity 0.15s;
+}
+
+.legend button.off {
+  opacity: 0.4;
+}
+
+.u-select {
+  position: absolute;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
 .legend i {
@@ -2175,6 +2193,31 @@ li[data-host] > .list-item {
 .mirror .sev {
   margin-right: 6px;
   vertical-align: -3px;
+}
+
+li[data-host] > .list-item {
+  background: transparent !important;
+}
+
+li[data-host]:hover {
+  background: color-mix(in srgb, var(--sel) 55%, transparent);
+}
+
+li[data-host]:has(> .list-item[aria-current="page"]) {
+  background: var(--sel);
+}
+
+@media (hover: hover) {
+  li[data-host] .grip {
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+
+  li[data-host]:hover .grip,
+  li[data-host].lifted .grip,
+  li[data-host] .grip:focus-visible {
+    opacity: 1;
+  }
 }
 
 @media (max-width: 820px) {
