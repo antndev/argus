@@ -34,13 +34,29 @@ fn chart_specs(host: &HostSummary) -> Vec<ChartSpec> {
     if latest(host, "cpu", "", "iowait").is_some() {
         cpu = cpu.series("I/O wait", key("cpu", "", "iowait"));
     }
+    let top = |field: &str| {
+        let mut list: Vec<&argus_model::Metric> = host.latest.iter().filter(|m| m.group == "docker" && m.field == field).collect();
+        list.sort_by(|a, b| b.value.total_cmp(&a.value));
+        list.into_iter().take(6).map(|m| m.item.clone()).collect::<Vec<_>>()
+    };
+    if !host.inventory.containers.is_empty() && host.info.cores > 0 {
+        let share = 1.0 / f64::from(host.info.cores);
+        cpu = cpu.scaled("Containers", key("docker", "*", "cpu"), share);
+        for name in top("cpu") {
+            cpu = cpu.detail(&name, key("docker", &name, "cpu"), share);
+        }
+    }
     let cpu = threshold(cpu, limit(host, "cpu", "", "total"), |v| format!("Alert at {v}%"));
     let mut memory = ChartSpec::new(id, "Memory", "Percent of RAM", Unit::Percent)
         .max(100.0)
         .series("Used", key("memory", "", "used"))
         .series("Cache", key("memory", "", "cache"));
     if !host.inventory.containers.is_empty() && host.info.memory_bytes > 0 {
-        memory = memory.scaled("Containers", key("docker", "*", "memory"), 1_048_576.0 * 100.0 / host.info.memory_bytes as f64);
+        let share = 1_048_576.0 * 100.0 / host.info.memory_bytes as f64;
+        memory = memory.scaled("Containers", key("docker", "*", "memory"), share);
+        for name in top("memory") {
+            memory = memory.detail(&name, key("docker", &name, "memory"), share);
+        }
     }
     let memory = threshold(memory, limit(host, "memory", "", "used"), |v| format!("Alert at {v}%"));
     let load_note = match limit(host, "load", "", "5") {
@@ -268,7 +284,7 @@ pub fn HostPage(host_id: String) -> impl IntoView {
                                         <td><Pill severity=severity text=text/></td>
                                         <td class="mono">{c.name.clone()}</td>
                                         <td class="num hide-sm">{format!("{:.1}%", c.cpu)}</td>
-                                        <td class="num">{format::memory(c.memory_bytes as f64 / 1_048_576.0)}</td>
+                                        <td class="num">{if c.memory_bytes == 0 && c.state == "running" { "n/a".to_string() } else { format::memory(c.memory_bytes as f64 / 1_048_576.0) }}</td>
                                         <td class="num hide-sm">{c.restarts.to_string()}</td>
                                         <td class="dim">{c.status.clone()}</td>
                                     </tr>

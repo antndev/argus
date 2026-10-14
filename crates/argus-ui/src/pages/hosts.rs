@@ -35,7 +35,20 @@ pub fn HostsPage() -> impl IntoView {
             .map(|h| h.info.id)
             .collect::<Vec<_>>()
     });
-    let over = RwSignal::new(None::<String>);
+    let drag = RwSignal::new(None::<Drag>);
+    let settling = RwSignal::new(false);
+    let finish = move || {
+        let Some(done) = drag.get_untracked() else { return };
+        settling.set(true);
+        if done.to != done.from
+            && let Some(target) = ids.with_untracked(|list| list.get(done.to).cloned())
+            && let Some(at) = store.host_ids().iter().position(|h| *h == target)
+        {
+            store.move_host(&done.id, at);
+        }
+        drag.set(None);
+        request_animation_frame(move || request_animation_frame(move || settling.set(false)));
+    };
     let item = move |id: String| {
         let lookup = id.clone();
         let host = Memo::new(move |_| store.host(&lookup));
@@ -57,14 +70,25 @@ pub fn HostsPage() -> impl IntoView {
                     .unwrap_or_default()
             })
         };
-        let (target, dragged, hovered, grabbed) = (id.clone(), id.clone(), id.clone(), id.clone());
+        let (target, lifted, shifted, grabbed) = (id.clone(), id.clone(), id.clone(), id.clone());
         let current = move || (selected.get().as_deref() == Some(target.as_str())).then_some("page");
+        let style = move || {
+            drag.with(|d| match d {
+                Some(d) if d.id == shifted => format!("transform:translateY({}px)", d.offset),
+                Some(d) => {
+                    let at = ids.with(|list| list.iter().position(|h| *h == shifted)).unwrap_or(d.from);
+                    let shift = match () {
+                        _ if d.to > d.from && at > d.from && at <= d.to => -d.step,
+                        _ if d.to < d.from && at >= d.to && at < d.from => d.step,
+                        _ => 0.0,
+                    };
+                    format!("transform:translateY({shift}px)")
+                }
+                None => String::new(),
+            })
+        };
         view! {
-            <li
-                data-host=id.clone()
-                class:dragging=move || store.dragging.with(|d| d.as_deref() == Some(dragged.as_str()))
-                class:drop=move || over.with(|o| o.as_deref() == Some(hovered.as_str()))
-            >
+            <li data-host=id.clone() class:lifted=move || drag.with(|d| d.as_ref().is_some_and(|d| d.id == lifted)) style=style>
                 <a class="list-item" href=Route::Host(id.clone()).href() aria-current=current aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" on:keydown=move_keys(store, id.clone())>
                     <span class=move || format!("tile {}", class(state()))>
                         <span class="ico" inner_html=icons::HOSTS></span>
@@ -82,29 +106,25 @@ pub fn HostsPage() -> impl IntoView {
                     inner_html=icons::GRIP
                     on:pointerdown=move |ev: leptos::ev::PointerEvent| {
                         ev.prevent_default();
-                        if let Some(handle) = ev.current_target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) {
-                            let _ = handle.set_pointer_capture(ev.pointer_id());
-                        }
-                        store.dragging.set(Some(grabbed.clone()));
+                        let Some(handle) = ev.current_target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else { return };
+                        let _ = handle.set_pointer_capture(ev.pointer_id());
+                        let Some(row) = handle.parent_element().and_then(|r| r.dyn_into::<web_sys::HtmlElement>().ok()) else { return };
+                        let other = row.next_element_sibling().or_else(|| row.previous_element_sibling()).and_then(|o| o.dyn_into::<web_sys::HtmlElement>().ok());
+                        let step = other.map_or(row.offset_height(), |other| (other.offset_top() - row.offset_top()).abs());
+                        let Some(from) = ids.with_untracked(|list| list.iter().position(|h| *h == grabbed)) else { return };
+                        drag.set(Some(Drag { id: grabbed.clone(), from, to: from, start: f64::from(ev.client_y()), offset: 0.0, step: f64::from(step.max(1)) }));
                     }
                     on:pointermove=move |ev: leptos::ev::PointerEvent| {
-                        if store.dragging.with_untracked(Option::is_some) {
-                            over.set(host_at(ev.client_x(), ev.client_y()));
-                        }
+                        let count = ids.with_untracked(Vec::len);
+                        drag.update(|d| {
+                            if let Some(d) = d {
+                                d.offset = f64::from(ev.client_y()) - d.start;
+                                d.to = (d.from as f64 + (d.offset / d.step).round()).clamp(0.0, count.saturating_sub(1) as f64) as usize;
+                            }
+                        });
                     }
-                    on:pointerup=move |_| {
-                        if let (Some(from), Some(to)) = (store.dragging.get_untracked(), over.get_untracked())
-                            && let Some(at) = store.host_ids().iter().position(|h| *h == to)
-                        {
-                            store.move_host(&from, at);
-                        }
-                        store.dragging.set(None);
-                        over.set(None);
-                    }
-                    on:pointercancel=move |_| {
-                        store.dragging.set(None);
-                        over.set(None);
-                    }
+                    on:pointerup=move |_| finish()
+                    on:pointercancel=move |_| finish()
                 ></span>
             </li>
         }
@@ -117,7 +137,7 @@ pub fn HostsPage() -> impl IntoView {
                     <span class="ico" inner_html=icons::SEARCH></span>
                     <input type="search" placeholder="Filter hosts" aria-label="Filter hosts" prop:value=move || filter.get() on:input=move |ev| filter.set(event_target_value(&ev))/>
                 </label>
-                <ul class="list" aria-label="Hosts">
+                <ul class="list" class:settling=move || settling.get() class:sorting=move || drag.with(Option::is_some) aria-label="Hosts">
                     <For each=move || ids.get() key=|id| id.clone() children=item/>
                 </ul>
                 <Show when=move || store.loaded() && ids.with(Vec::is_empty)>
@@ -132,6 +152,12 @@ pub fn HostsPage() -> impl IntoView {
     }
 }
 
-fn host_at(x: i32, y: i32) -> Option<String> {
-    document().element_from_point(x as f32, y as f32)?.closest("li[data-host]").ok()??.get_attribute("data-host")
+#[derive(Clone, Debug, PartialEq)]
+struct Drag {
+    id: String,
+    from: usize,
+    to: usize,
+    start: f64,
+    offset: f64,
+    step: f64,
 }

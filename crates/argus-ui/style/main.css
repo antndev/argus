@@ -41,6 +41,11 @@
   --s1: #2a78d6;
   --s2: #eb6834;
   --s3: #1baf7a;
+  --s4: #8a5cf0;
+  --s5: #d39a12;
+  --s6: #d6457a;
+  --s7: #1e9bb0;
+  --s8: #7b8794;
   --shadow: 0 24px 64px rgba(0, 0, 0, 0.18), 0 0 0 1px #e3e1d9;
   --lift: 0 8px 22px rgba(20, 20, 18, 0.08);
   --font: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -85,6 +90,11 @@
     --s1: #3987e5;
     --s2: #d95926;
     --s3: #199e70;
+    --s4: #9b74f2;
+    --s5: #d9a43a;
+    --s6: #df5b8a;
+    --s7: #2aaabe;
+    --s8: #8c96a3;
     --shadow: 0 24px 64px rgba(0, 0, 0, 0.6), 0 0 0 1px #292929;
     --lift: 0 10px 26px rgba(0, 0, 0, 0.45);
     color-scheme: dark;
@@ -126,6 +136,11 @@
   --s1: #3987e5;
   --s2: #d95926;
   --s3: #199e70;
+  --s4: #9b74f2;
+  --s5: #d9a43a;
+  --s6: #df5b8a;
+  --s7: #2aaabe;
+  --s8: #8c96a3;
   --shadow: 0 24px 64px rgba(0, 0, 0, 0.6), 0 0 0 1px #292929;
   --lift: 0 10px 26px rgba(0, 0, 0, 0.45);
   color-scheme: dark;
@@ -993,12 +1008,30 @@ td {
 
 th:first-child,
 td:first-child {
-  padding-left: 0;
+  padding-left: 10px;
 }
 
 th:last-child,
 td:last-child {
-  padding-right: 0;
+  padding-right: 10px;
+}
+
+.tbl-wrap:not(.sheet) {
+  margin: 0 -10px;
+}
+
+.tbl-wrap.sheet {
+  padding: 0;
+}
+
+.sheet th:first-child,
+.sheet td:first-child {
+  padding-left: 14px;
+}
+
+.sheet th:last-child,
+.sheet td:last-child {
+  padding-right: 14px;
 }
 
 tbody tr {
@@ -2076,21 +2109,40 @@ ol.sheet {
 }
 
 li[data-host] {
+  position: relative;
   display: flex;
   align-items: center;
+  border-radius: 6px;
+  transition: transform 180ms var(--ease), box-shadow 180ms var(--ease), background-color 180ms;
+}
+
+.list.sorting li[data-host] {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.list.settling li[data-host],
+li[data-host].lifted {
+  transition: box-shadow 180ms var(--ease), background-color 180ms;
+}
+
+li[data-host].lifted {
+  z-index: 2;
+  background: var(--sel);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+li[data-host].lifted > .list-item {
+  background: transparent;
+}
+
+li[data-host].lifted .grip {
+  cursor: grabbing;
 }
 
 li[data-host] > .list-item {
   flex: 1;
   min-width: 0;
-}
-
-li[data-host].dragging {
-  opacity: 0.45;
-}
-
-li[data-host].drop > .list-item {
-  box-shadow: inset 0 0 0 1px var(--accent);
 }
 
 .grip {
@@ -2354,8 +2406,12 @@ li[data-host].drop > .list-item {
     grid-template-columns: 96px minmax(0, 1fr) auto;
     gap: 4px 12px;
     align-items: center;
-    padding: 12px 0;
+    padding: 12px 10px;
     border-bottom: 1px solid var(--line-soft);
+  }
+
+  .sheet.stack tr {
+    padding: 12px 14px;
   }
 
   .stack td {

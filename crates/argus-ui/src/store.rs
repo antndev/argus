@@ -71,7 +71,6 @@ pub struct Store {
     pub saving: RwSignal<bool>,
     pub save_error: RwSignal<Option<String>>,
     saves: StoredValue<u64>,
-    pub dragging: RwSignal<Option<String>>,
     toasts: StoredValue<u64>,
 }
 
@@ -102,7 +101,6 @@ impl Store {
             saving: RwSignal::new(false),
             save_error: RwSignal::new(None),
             saves: StoredValue::new(0),
-            dragging: RwSignal::new(None),
             toasts: StoredValue::new(0),
         }
     }

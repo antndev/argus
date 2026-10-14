@@ -119,7 +119,7 @@ window.argusCharts = (() => {
 
   function options(entry) {
     const { spec, element } = entry;
-    const colors = ["--s1", "--s2", "--s3"].map(token);
+    const colors = ["--s1", "--s2", "--s3", "--s4", "--s5", "--s6", "--s7", "--s8"].map(token);
     const axis = token("--text-3");
     const grid = token("--grid");
     const surface = token("--bg");

@@ -5,6 +5,7 @@ use leptos::task::spawn_local;
 use wasm_bindgen::prelude::*;
 
 use crate::api;
+use crate::components::segmented;
 use crate::format;
 use crate::store::{Range, use_store};
 
@@ -19,6 +20,8 @@ extern "C" {
     #[wasm_bindgen(catch, js_namespace = argusCharts, js_name = destroy)]
     fn js_destroy(id: u32) -> Result<(), JsValue>;
 }
+
+const VIEWS: &[(bool, &str)] = &[(false, "Containers"), (true, "Each container")];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Unit {
@@ -55,6 +58,7 @@ pub struct ChartSpec {
     note: String,
     unit: Unit,
     series: Vec<(String, String, f64)>,
+    detail: Vec<(String, String, f64)>,
     max: Option<f64>,
     floor: f64,
     thresholds: Vec<(f64, String)>,
@@ -62,7 +66,17 @@ pub struct ChartSpec {
 
 impl ChartSpec {
     pub fn new(host: &str, title: &str, note: impl Into<String>, unit: Unit) -> Self {
-        Self { host: host.to_string(), title: title.to_string(), note: note.into(), unit, series: Vec::new(), max: None, floor: 0.0, thresholds: Vec::new() }
+        Self {
+            host: host.to_string(),
+            title: title.to_string(),
+            note: note.into(),
+            unit,
+            series: Vec::new(),
+            detail: Vec::new(),
+            max: None,
+            floor: 0.0,
+            thresholds: Vec::new(),
+        }
     }
 
     pub fn series(self, label: &str, key: String) -> Self {
@@ -72,6 +86,20 @@ impl ChartSpec {
     pub fn scaled(mut self, label: &str, key: String, factor: f64) -> Self {
         self.series.push((label.to_string(), key, factor));
         self
+    }
+
+    pub fn detail(mut self, label: &str, key: String, factor: f64) -> Self {
+        self.detail.push((label.to_string(), key, factor));
+        self
+    }
+
+    fn active(&self, detailed: bool) -> Self {
+        if !detailed || self.detail.is_empty() {
+            return self.clone();
+        }
+        let mut series = self.series[..self.series.len().saturating_sub(1)].to_vec();
+        series.extend(self.detail.iter().cloned());
+        Self { series, ..self.clone() }
     }
 
     pub fn max(mut self, max: f64) -> Self {
@@ -116,21 +144,30 @@ pub fn Chart(spec: ChartSpec) -> impl IntoView {
     let shown = StoredValue::new(None::<Range>);
     let latest = RwSignal::new(Vec::<Option<f64>>::new());
     let tick = Memo::new(move |_| (store.clock.get() / 30_000.0).floor() as i64);
-    let json = spec.to_json();
     let unit = spec.unit;
     let title = spec.title.clone();
     let note = spec.note.clone();
-    let labels: Vec<String> = spec.series.iter().map(|(label, _, _)| label.clone()).collect();
-    let factors: Vec<f64> = spec.series.iter().map(|(_, _, factor)| *factor).collect();
+    let splits = !spec.detail.is_empty();
+    let detailed = RwSignal::new(false);
+    let mode = StoredValue::new(false);
     let spec = StoredValue::new(spec);
+    let current = Memo::new(move |_| spec.with_value(|s| s.active(detailed.get())));
 
     Effect::new(move |_| {
         let range = store.range.get();
         tick.track();
         let Some(element) = node.get() else { return };
-        let url = spec.with_value(|s| s.url(range));
-        let json = json.clone();
-        let factors = factors.clone();
+        let active = current.get();
+        if mode.get_value() != detailed.get_untracked() {
+            mode.set_value(detailed.get_untracked());
+            if let Some(id) = handle.get_value() {
+                let _ = js_destroy(id);
+                handle.set_value(None);
+            }
+        }
+        let url = active.url(range);
+        let json = active.to_json();
+        let factors: Vec<f64> = active.series.iter().map(|(_, _, factor)| *factor).collect();
         let sequence = request.get_value() + 1;
         request.set_value(sequence);
         spawn_local(async move {
@@ -167,25 +204,30 @@ pub fn Chart(spec: ChartSpec) -> impl IntoView {
         }
     });
 
-    let legend = labels
-        .into_iter()
-        .enumerate()
-        .map(|(index, label)| {
-            let value = move || latest.with(|v| v.get(index).copied().flatten().map(|x| unit.format(x)).unwrap_or_default());
-            view! {
-                <span>
-                    <i style=format!("background:var(--s{})", index + 1)></i>
-                    {label}
-                    <b>{value}</b>
-                </span>
-            }
-        })
-        .collect_view();
+    let legend = move || {
+        current
+            .get()
+            .series
+            .into_iter()
+            .enumerate()
+            .map(|(index, (label, _, _))| {
+                let value = move || latest.with(|v| v.get(index).copied().flatten().map(|x| unit.format(x)).unwrap_or_default());
+                view! {
+                    <span>
+                        <i style=format!("background:var(--s{})", index % 8 + 1)></i>
+                        {label}
+                        <b>{value}</b>
+                    </span>
+                }
+            })
+            .collect_view()
+    };
 
     view! {
         <section class="panel">
             <header class="panel-head">
                 <h3>{title}</h3>
+                {splits.then(|| segmented(detailed, VIEWS, "Containers"))}
                 <span class="meta">{note}</span>
             </header>
             <div class="legend">{legend}</div>

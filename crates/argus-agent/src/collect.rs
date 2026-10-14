@@ -131,7 +131,9 @@ impl Collector {
                         if sample.measured.contains(&container.name) {
                             metrics.push(Metric::new("docker", &container.name, "cpu", container.cpu));
                         }
-                        metrics.push(Metric::new("docker", &container.name, "memory", container.memory_bytes as f64 / 1_048_576.0));
+                        if container.memory_bytes > 0 {
+                            metrics.push(Metric::new("docker", &container.name, "memory", container.memory_bytes as f64 / 1_048_576.0));
+                        }
                     }
                     inventory.containers = sample.containers;
                 }
