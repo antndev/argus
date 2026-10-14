@@ -369,7 +369,7 @@ fn backup_row(store: Store, backup: BackupSchedule) -> impl IntoView {
             <td>{backup.size.clone()}{added.map(|text| view! { <span class="sub">{text}</span> })}</td>
             <td>
                 <Pill severity=mirror_severity text=mirror_text/>
-                <span class="sub">{move || if mirror_message.is_empty() { ago(mirrored) } else { mirror_message.clone() }}</span>
+                <span class="sub clip" title=backup.mirror_message.clone()>{move || if mirror_message.is_empty() { ago(mirrored) } else { mirror_message.clone() }}</span>
             </td>
         </tr>
     }

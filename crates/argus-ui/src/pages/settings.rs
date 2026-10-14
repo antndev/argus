@@ -962,8 +962,9 @@ pub fn SettingsPage() -> impl IntoView {
         }
     };
     let loaded = Memo::new(move |_| store.config.with(Option::is_some));
+    let chosen = move || store.route.with(|r| matches!(r, Route::Settings(page) if !page.is_empty()));
     view! {
-        <div class="split">
+        <div class="split" class:has-detail=chosen>
             <nav class="split-list narrow" aria-label="Settings sections">
                 {PAGES
                     .iter()
@@ -975,6 +976,7 @@ pub fn SettingsPage() -> impl IntoView {
             </nav>
             <section class="split-detail" aria-label="Settings">
                 <div class="settings">
+                    <a class="back" href="#/settings"><span class="ico" inner_html=crate::icons::BACK></span>"Settings"</a>
                     <h2>{title}</h2>
                     {move || {
                         let _ = (loaded.get(), page.get());

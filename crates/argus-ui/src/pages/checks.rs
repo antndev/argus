@@ -56,10 +56,10 @@ pub fn ChecksPage() -> impl IntoView {
                 view! {
                     <tr>
                         <td><Pill severity=check_severity(check.status)/></td>
-                        <td><span class="check-name">{check.name.clone()}</span><span class="sub mono">{check.target.clone()}</span></td>
-                        <td><span class="tag">{check.kind.clone()}</span></td>
+                        <td><span class="check-name">{check.name.clone()}</span><span class="sub mono clip" title=check.target.clone()>{check.target.clone()}</span></td>
+                        <td class="hide-sm"><span class="tag">{check.kind.clone()}</span></td>
                         <td><a class="link" href=crate::route::Route::Host(host.clone()).href()>{host.clone()}</a></td>
-                        <td>{check.message.clone()}</td>
+                        <td><span class="msg" title=check.message.clone()>{check.message.clone()}</span></td>
                         <td>{uptime_strip(strip)}</td>
                         <td class="num">{check.latency_ms.map(format::latency).unwrap_or_default()}</td>
                     </tr>
@@ -76,7 +76,7 @@ pub fn ChecksPage() -> impl IntoView {
         <Show when=empty>
             <p class="meta">"No checks configured yet."</p>
         </Show>
-        <div class="tbl-wrap">
+        <div class="tbl-wrap stack">
             <table>
                 <thead>
                     <tr>

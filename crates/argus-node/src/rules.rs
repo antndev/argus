@@ -387,7 +387,12 @@ pub fn describe(app: &App) -> Vec<RuleInfo> {
             if rule.hold.0 > 0 {
                 condition.push_str(&format!(" for {}", duration_text(rule.hold.0)));
             }
-            RuleInfo { name: rule.name.clone(), scope: rule.hosts.join(", "), condition, severity: rule.severity }
+            RuleInfo {
+                name: rule.name.clone(),
+                scope: if rule.hosts.iter().any(|h| h == "*") { "All hosts".to_string() } else { rule.hosts.join(", ") },
+                condition,
+                severity: rule.severity,
+            }
         })
         .collect();
     let fixed = [

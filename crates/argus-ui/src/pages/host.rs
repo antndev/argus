@@ -228,16 +228,16 @@ pub fn HostPage(host_id: String) -> impl IntoView {
         <Show when=move || !checks().is_empty()>
             <section>
                 <div class="sec-head"><h2>"Checks"</h2><span class="meta">"Run by this agent"</span></div>
-                <div class="tbl-wrap">
+                <div class="tbl-wrap stack">
                     <table>
                         <thead><tr><th>"Status"</th><th>"Check"</th><th>"Type"</th><th>"Result"</th><th class="num">"Latency"</th></tr></thead>
                         <tbody>
                             {move || checks().into_iter().map(|c| view! {
                                 <tr>
                                     <td><Pill severity=check_severity(c.status)/></td>
-                                    <td><span class="check-name">{c.name.clone()}</span><span class="sub mono">{c.target.clone()}</span></td>
-                                    <td><span class="tag">{c.kind.clone()}</span></td>
-                                    <td>{c.message.clone()}</td>
+                                    <td><span class="check-name">{c.name.clone()}</span><span class="sub mono clip" title=c.target.clone()>{c.target.clone()}</span></td>
+                                    <td class="hide-sm"><span class="tag">{c.kind.clone()}</span></td>
+                                    <td><span class="msg" title=c.message.clone()>{c.message.clone()}</span></td>
                                     <td class="num">{c.latency_ms.map(format::latency).unwrap_or_default()}</td>
                                 </tr>
                             }).collect_view()}

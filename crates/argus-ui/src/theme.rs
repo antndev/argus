@@ -36,6 +36,16 @@ impl Theme {
                 other => root.set_attribute("data-theme", other.key()),
             };
         }
+        for (id, scheme) in [("theme-light", "#faf9f5"), ("theme-dark", "#151515")] {
+            let color = match self {
+                Self::System => scheme,
+                Self::Light => "#faf9f5",
+                Self::Dark => "#151515",
+            };
+            if let Some(meta) = document().get_element_by_id(id) {
+                let _ = meta.set_attribute("content", color);
+            }
+        }
         if let Some(storage) = storage() {
             let _ = storage.set_item(KEY, self.key());
         }

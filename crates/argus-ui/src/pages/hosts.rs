@@ -17,7 +17,9 @@ pub fn HostsPage() -> impl IntoView {
         _ => None,
     });
     Effect::new(move |_| {
-        if selected.get().is_none()
+        let compact = window().inner_width().ok().and_then(|w| w.as_f64()).is_some_and(|w| w <= 820.0);
+        if !compact
+            && selected.get().is_none()
             && let Some(first) = store.host_ids().into_iter().next()
         {
             Route::Host(first).go();
@@ -70,7 +72,7 @@ pub fn HostsPage() -> impl IntoView {
         }
     };
     view! {
-        <div class="split">
+        <div class="split" class:has-detail=move || selected.with(Option::is_some)>
             <div class="split-list">
                 <a class="btn" href="#/settings/agents"><span class="ico" inner_html=icons::PLUS></span>"Add host"</a>
                 <label class="filter">
@@ -85,6 +87,7 @@ pub fn HostsPage() -> impl IntoView {
                 </Show>
             </div>
             <section class="split-detail wide" aria-label="Host">
+                <a class="back" href="#/hosts"><span class="ico" inner_html=icons::BACK></span>"Hosts"</a>
                 {move || selected.get().map(|id| view! { <div class="page"><HostPage host_id=id/></div> })}
             </section>
         </div>

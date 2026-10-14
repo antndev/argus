@@ -65,18 +65,17 @@ pub fn AlertsPage() -> impl IntoView {
                 <h2>"Rules"</h2>
                 <a class="link" href="#/settings/rules">"Change rules"</a>
             </div>
-            <div class="tbl-wrap sheet">
+            <div class="tbl-wrap sheet stack">
                 <table>
                     <thead>
-                        <tr><th>"Rule"</th><th>"Applies to"</th><th>"Condition"</th><th>"Severity"</th></tr>
+                        <tr><th>"Severity"</th><th>"Rule"</th><th>"Condition"</th></tr>
                     </thead>
                     <tbody>
                         {move || rules.get().into_iter().map(|rule| view! {
                             <tr>
-                                <td>{rule.name}</td>
-                                <td>{rule.scope}</td>
-                                <td class="mono">{rule.condition}</td>
                                 <td><Pill severity=rule.severity/></td>
+                                <td><span class="check-name">{rule.name}</span><span class="sub">{rule.scope}</span></td>
+                                <td class="mono">{rule.condition}</td>
                             </tr>
                         }).collect_view()}
                     </tbody>

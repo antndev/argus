@@ -36,6 +36,7 @@ line_icon!(
 );
 line_icon!(SEARCH, r#"<circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3"/>"#);
 line_icon!(WAITING, r#"<circle cx="8" cy="8" r="6"/><path d="M8 4.75V8l2.25 1.5"/>"#);
+line_icon!(BACK, r#"<path d="M10 3.5 5.5 8l4.5 4.5"/>"#);
 line_icon!(PLUS, r#"<path d="M8 3v10M3 8h10"/>"#);
 line_icon!(TRASH, r#"<path d="M2.5 4.5h11M6 4.5V3h4v1.5M4 4.5l.7 9h6.6l.7-9"/>"#);
 line_icon!(COPY, r#"<rect x="5.5" y="5.5" width="8" height="8" rx="1.25"/><path d="M3 10.5V3.75C3 3.3 3.3 3 3.75 3h6.75"/>"#);
