@@ -79,7 +79,8 @@ dashboard should not be reachable from the internet, use two names instead (`arg
   - `rules`: metric thresholds. `metric` is `group|item|field` with `*` as wildcard, `hosts` accepts globs and
     `!exclusions`, `for` is how long the condition must hold. Host unreachable, failing checks, degraded RAID, SMART
     warnings, failed systemd units, pending reboots and containers that stopped although their restart policy is
-    `always` or `unless-stopped` always alert.
+    `always` or `unless-stopped` always alert. A container stopped by hand (`docker stop`, `docker compose stop`) shows
+    as stopped and does not alert.
   - `push`: the contact address the push services ask for, the key pair (created on the first start), the
     addresses where phones confirm receipt, an optional daily status message and the registered devices. After three
     notifications within two minutes the node holds further changes and sends one summary two minutes later.

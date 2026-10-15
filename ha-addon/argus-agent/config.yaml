@@ -1,5 +1,5 @@
 name: Argus agent
-version: "0.2.1"
+version: "0.2.2"
 slug: argus_agent
 description: Reports Home Assistant host metrics to Argus nodes
 url: https://github.com/antndev/argus

@@ -14,6 +14,8 @@ struct Stored {
     name: String,
     #[serde(default)]
     restart_count: u32,
+    #[serde(default)]
+    has_been_manually_stopped: bool,
     state: State,
     config: Settings,
 }
@@ -107,6 +109,7 @@ fn container(stored: &Stored, now: i64) -> Container {
         _ if state.running && state.paused => ("paused", format!("Up {} (paused)", since(started))),
         _ if state.restarting => ("restarting", format!("Restarting ({}) {} ago", state.exit_code, since(finished))),
         _ if state.running => ("running", format!("Up {}", since(started))),
+        _ if stored.has_been_manually_stopped => ("stopped", format!("Stopped {} ago", since(finished))),
         _ if state.dead => ("dead", "Dead".to_string()),
         _ if started.is_none() => ("created", "Created".to_string()),
         _ => ("exited", format!("Exited ({}) {} ago", state.exit_code, since(finished))),
@@ -192,6 +195,9 @@ mod tests {
         let exited = r#"{"ID":"b","Name":"/dump","Config":{"Image":"alpine"},"State":{"ExitCode":1,"StartedAt":"2026-10-14T08:00:00Z","FinishedAt":"2026-10-14T13:00:00Z"}}"#;
         let exited = container(&serde_json::from_str(exited).expect("parses"), now);
         assert_eq!((exited.state.as_str(), exited.status.as_str()), ("exited", "Exited (1) 30 minutes ago"));
+        let stopped = r#"{"ID":"d","Name":"/mc","HasBeenManuallyStopped":true,"Config":{},"State":{"ExitCode":143,"StartedAt":"2026-10-14T08:00:00Z","FinishedAt":"2026-10-14T13:00:00Z"}}"#;
+        let stopped = container(&serde_json::from_str(stopped).expect("parses"), now);
+        assert_eq!((stopped.state.as_str(), stopped.status.as_str()), ("stopped", "Stopped 30 minutes ago"));
         let created = r#"{"ID":"c","Name":"/new","Config":{},"State":{"StartedAt":"0001-01-01T00:00:00Z"}}"#;
         assert_eq!(container(&serde_json::from_str(created).expect("parses"), now).state, "created");
     }

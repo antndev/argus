@@ -164,7 +164,7 @@ fn inventory_conditions(app: &App, snapshot: &HostSnapshot, active: &HashMap<Str
     }
     for container in &inventory.containers {
         let kept = matches!(container.restart_policy.as_str(), "always" | "unless-stopped");
-        if kept && container.state != "running" {
+        if kept && !matches!(container.state.as_str(), "running" | "stopped") {
             let title = format!("Container {} stopped", container.name);
             conditions.push(Condition {
                 hold: 2 * MINUTE,
@@ -451,7 +451,7 @@ pub fn describe(app: &App) -> Vec<RuleInfo> {
     let fixed = [
         ("Host unreachable", "All hosts", "No report for 90 s", Severity::Critical),
         ("Services", "Every service", "3 failed runs in a row", Severity::Critical),
-        ("Containers", "Docker hosts", "Stopped for 2 min although it should restart", Severity::Critical),
+        ("Containers", "Docker hosts", "Stopped for 2 min although it should restart, unless stopped by hand", Severity::Critical),
         ("RAID", "mdraid arrays", "Degraded or inactive", Severity::Critical),
         ("SMART", "NVMe drives", "Critical warning set", Severity::Critical),
         ("Systemd", "Linux hosts", "Failed units", Severity::Warning),
@@ -646,8 +646,12 @@ mod tests {
         let container =
             |name: &str, state: &str, policy: &str| Container { name: name.into(), state: state.into(), restart_policy: policy.into(), ..Default::default() };
         let mut report = report("h", "home", Vec::new());
-        report.inventory.containers =
-            vec![container("minecraft", "exited", "unless-stopped"), container("dump", "exited", "no"), container("db", "running", "always")];
+        report.inventory.containers = vec![
+            container("minecraft", "exited", "unless-stopped"),
+            container("dump", "exited", "no"),
+            container("db", "running", "always"),
+            container("mc", "stopped", "always"),
+        ];
         app.store_report(report.clone(), 0);
         evaluate(&app, 0);
         assert!(alerts(&app).values().all(|a| a.state == AlertState::Pending));
@@ -655,7 +659,7 @@ mod tests {
         evaluate(&app, 3 * MINUTE);
         let all = alerts(&app);
         assert_eq!(all["h|container|minecraft"].severity, Severity::Critical);
-        assert!(!all.contains_key("h|container|dump") && !all.contains_key("h|container|db"));
+        assert!(["dump", "db", "mc"].iter().all(|name| !all.contains_key(&format!("h|container|{name}"))));
     }
 
     #[test]
