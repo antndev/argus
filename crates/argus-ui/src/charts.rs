@@ -58,24 +58,24 @@ impl Unit {
 pub struct ChartSpec {
     host: String,
     title: String,
-    note: String,
     unit: Unit,
     series: Vec<(String, String, f64)>,
     detail: Vec<(String, String, f64)>,
+    split: bool,
     max: Option<f64>,
     floor: f64,
     thresholds: Vec<(f64, String)>,
 }
 
 impl ChartSpec {
-    pub fn new(host: &str, title: &str, note: impl Into<String>, unit: Unit) -> Self {
+    pub fn new(host: &str, title: &str, unit: Unit) -> Self {
         Self {
             host: host.to_string(),
             title: title.to_string(),
-            note: note.into(),
             unit,
             series: Vec::new(),
             detail: Vec::new(),
+            split: false,
             max: None,
             floor: 0.0,
             thresholds: Vec::new(),
@@ -88,6 +88,11 @@ impl ChartSpec {
 
     pub fn scaled(mut self, label: &str, key: String, factor: f64) -> Self {
         self.series.push((label.to_string(), key, factor));
+        self
+    }
+
+    pub fn split(mut self) -> Self {
+        self.split = true;
         self
     }
 
@@ -150,8 +155,8 @@ pub fn Chart(spec: ChartSpec) -> impl IntoView {
     let tick = Memo::new(move |_| (store.clock.get() / 30_000.0).floor() as i64);
     let unit = spec.unit;
     let title = spec.title.clone();
-    let note = spec.note.clone();
-    let splits = !spec.detail.is_empty();
+    let splits = spec.split;
+    let empty = spec.detail.is_empty();
     let detailed = RwSignal::new(false);
     let mode = StoredValue::new(false);
     let spec = StoredValue::new(spec);
@@ -240,8 +245,11 @@ pub fn Chart(spec: ChartSpec) -> impl IntoView {
         <section class="panel">
             <header class="panel-head">
                 <h3>{title}</h3>
-                {splits.then(|| segmented(detailed, VIEWS, "Containers"))}
-                <span class="meta">{note}</span>
+                {splits.then(|| view! {
+                    <fieldset class="seg-box" disabled=empty title=empty.then_some("No per-container data on this host")>
+                        {segmented(detailed, VIEWS, "Containers")}
+                    </fieldset>
+                })}
             </header>
             <div class="legend">{legend}</div>
             <div class="chart" node_ref=node></div>

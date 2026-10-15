@@ -30,11 +30,15 @@ fn interfaces(host: &HostSummary) -> Vec<(String, String)> {
 
 fn chart_specs(host: &HostSummary) -> Vec<ChartSpec> {
     let id = host.info.id.as_str();
-    let mut cpu = ChartSpec::new(id, "CPU", "Percent of all cores", Unit::Percent).max(100.0).series("Total", key("cpu", "", "total"));
+    let mut cpu = ChartSpec::new(id, "CPU", Unit::Percent).max(100.0).series("Total", key("cpu", "", "total"));
     if latest(host, "cpu", "", "iowait").is_some() {
         cpu = cpu.series("I/O wait", key("cpu", "", "iowait"));
     }
     let containers = |spec: ChartSpec, field: &str, share: f64| {
+        if host.inventory.containers.is_empty() {
+            return spec;
+        }
+        let spec = spec.split();
         let mut names: Vec<&str> = host.latest.iter().filter(|m| m.group == "docker" && m.field == field).map(|m| m.item.as_str()).collect();
         if names.is_empty() || !share.is_finite() {
             return spec;
@@ -43,18 +47,11 @@ fn chart_specs(host: &HostSummary) -> Vec<ChartSpec> {
         names.into_iter().fold(spec.scaled("Containers", key("docker", "*", field), share), |spec, name| spec.detail(name, key("docker", name, field), share))
     };
     let cpu = containers(cpu, "cpu", 1.0 / f64::from(host.info.cores));
-    let cpu = threshold(cpu, limit(host, "cpu", "", "total"), |v| format!("Alert at {v}%"));
-    let memory = ChartSpec::new(id, "Memory", "Percent of RAM", Unit::Percent)
-        .max(100.0)
-        .series("Used", key("memory", "", "used"))
-        .series("Cache", key("memory", "", "cache"));
+    let cpu = threshold(cpu, limit(host, "cpu", "", "total"), |v| format!("Total alert at {v}%"));
+    let memory = ChartSpec::new(id, "Memory", Unit::Percent).max(100.0).series("Used", key("memory", "", "used")).series("Cache", key("memory", "", "cache"));
     let memory = containers(memory, "memory", 1_048_576.0 * 100.0 / host.info.memory_bytes as f64);
-    let memory = threshold(memory, limit(host, "memory", "", "used"), |v| format!("Alert at {v}%"));
-    let load_note = match limit(host, "load", "", "5") {
-        Some(value) => format!("{} cores, alert above {value}", host.info.cores),
-        None => format!("{} cores", host.info.cores),
-    };
-    let load = ChartSpec::new(id, "Load", load_note, Unit::Load)
+    let memory = threshold(memory, limit(host, "memory", "", "used"), |v| format!("Used alert at {v}%"));
+    let load = ChartSpec::new(id, "Load", Unit::Load)
         .floor(1.0)
         .series("1 min", key("load", "", "1"))
         .series("5 min", key("load", "", "5"))
@@ -62,7 +59,7 @@ fn chart_specs(host: &HostSummary) -> Vec<ChartSpec> {
     let mut specs = vec![cpu, memory, load];
     let sensors: Vec<&argus_model::Metric> = temperatures(host).into_iter().take(3).collect();
     if !sensors.is_empty() {
-        let mut spec = ChartSpec::new(id, "Temperatures", "Per sensor", Unit::Celsius);
+        let mut spec = ChartSpec::new(id, "Temperatures", Unit::Celsius);
         let mut seen: Vec<f64> = Vec::new();
         for sensor in &sensors {
             spec = spec.series(&sensor.item, sensor.key());
@@ -75,7 +72,7 @@ fn chart_specs(host: &HostSummary) -> Vec<ChartSpec> {
         specs.push(spec);
     }
     for (name, label) in interfaces(host) {
-        specs.push(ChartSpec::new(id, "Network", label, Unit::Rate).series("In", key("net", &name, "rx")).series("Out", key("net", &name, "tx")));
+        specs.push(ChartSpec::new(id, &format!("Network {label}"), Unit::Rate).series("In", key("net", &name, "rx")).series("Out", key("net", &name, "tx")));
     }
     specs
 }
