@@ -34,30 +34,21 @@ fn chart_specs(host: &HostSummary) -> Vec<ChartSpec> {
     if latest(host, "cpu", "", "iowait").is_some() {
         cpu = cpu.series("I/O wait", key("cpu", "", "iowait"));
     }
-    let top = |field: &str| {
-        let mut list: Vec<&argus_model::Metric> = host.latest.iter().filter(|m| m.group == "docker" && m.field == field).collect();
-        list.sort_by(|a, b| b.value.total_cmp(&a.value));
-        list.into_iter().take(6).map(|m| m.item.clone()).collect::<Vec<_>>()
-    };
-    if !host.inventory.containers.is_empty() && host.info.cores > 0 {
-        let share = 1.0 / f64::from(host.info.cores);
-        cpu = cpu.scaled("Containers", key("docker", "*", "cpu"), share);
-        for name in top("cpu") {
-            cpu = cpu.detail(&name, key("docker", &name, "cpu"), share);
+    let containers = |spec: ChartSpec, field: &str, share: f64| {
+        let mut names: Vec<&str> = host.latest.iter().filter(|m| m.group == "docker" && m.field == field).map(|m| m.item.as_str()).collect();
+        if names.is_empty() || !share.is_finite() {
+            return spec;
         }
-    }
+        names.sort_unstable();
+        names.into_iter().fold(spec.scaled("Containers", key("docker", "*", field), share), |spec, name| spec.detail(name, key("docker", name, field), share))
+    };
+    let cpu = containers(cpu, "cpu", 1.0 / f64::from(host.info.cores));
     let cpu = threshold(cpu, limit(host, "cpu", "", "total"), |v| format!("Alert at {v}%"));
-    let mut memory = ChartSpec::new(id, "Memory", "Percent of RAM", Unit::Percent)
+    let memory = ChartSpec::new(id, "Memory", "Percent of RAM", Unit::Percent)
         .max(100.0)
         .series("Used", key("memory", "", "used"))
         .series("Cache", key("memory", "", "cache"));
-    if !host.inventory.containers.is_empty() && host.info.memory_bytes > 0 {
-        let share = 1_048_576.0 * 100.0 / host.info.memory_bytes as f64;
-        memory = memory.scaled("Containers", key("docker", "*", "memory"), share);
-        for name in top("memory") {
-            memory = memory.detail(&name, key("docker", &name, "memory"), share);
-        }
-    }
+    let memory = containers(memory, "memory", 1_048_576.0 * 100.0 / host.info.memory_bytes as f64);
     let memory = threshold(memory, limit(host, "memory", "", "used"), |v| format!("Alert at {v}%"));
     let load_note = match limit(host, "load", "", "5") {
         Some(value) => format!("{} cores, alert above {value}", host.info.cores),
@@ -319,12 +310,9 @@ pub fn HostPage(host_id: String) -> impl IntoView {
 }
 
 fn container_state(container: &argus_model::Container) -> (Severity, String) {
-    match (container.state.as_str(), container.health.as_str()) {
-        ("running", "healthy") => (Severity::Ok, "Healthy".into()),
-        ("running", "unhealthy") => (Severity::Critical, "Unhealthy".into()),
-        ("running", "starting") => (Severity::Muted, "Starting".into()),
-        ("running", _) => (Severity::Ok, "Running".into()),
-        ("paused" | "restarting" | "dead", _) => (Severity::Warning, format::capitalize(&container.state)),
-        (state, _) => (Severity::Muted, format::capitalize(state)),
+    match container.state.as_str() {
+        "running" => (Severity::Ok, "Running".into()),
+        "paused" | "restarting" | "dead" => (Severity::Warning, format::capitalize(&container.state)),
+        state => (Severity::Muted, format::capitalize(state)),
     }
 }

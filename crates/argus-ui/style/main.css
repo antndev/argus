@@ -1483,11 +1483,11 @@ td .sev {
   }
   44%,
   50% {
-    transform: translate(-1.4px, 0);
+    transform: translate(-2.6px, 0);
   }
   54%,
   58% {
-    transform: translate(1.4px, 0.2px);
+    transform: translate(2.6px, 0.3px);
   }
 }
 

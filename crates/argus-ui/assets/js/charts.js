@@ -115,7 +115,7 @@ window.argusCharts = (() => {
             return;
           }
           const value = u.data[nearest + 1][i];
-          const row = `<div class="chart-tip-row"><i style="background:${colors[nearest]}"></i><span>${escape(spec.series[nearest])}</span><b>${format(value)}</b></div>`;
+          const row = `<div class="chart-tip-row"><i style="background:${colors[nearest % colors.length]}"></i><span>${escape(spec.series[nearest])}</span><b>${format(value)}</b></div>`;
           tip.innerHTML = `<div class="chart-tip-time">${stamp(u.data[0][i])}</div>${row}`;
           tip.hidden = false;
           const width = u.over.clientWidth;
@@ -145,7 +145,7 @@ window.argusCharts = (() => {
         y: false,
         focus: { prox: 24 },
         drag: { x: true, y: false, setScale: true },
-        points: { size: 8, width: 2, stroke: () => surface, fill: (u, i) => colors[i - 1] },
+        points: { size: 8, width: 2, stroke: () => surface, fill: (u, i) => colors[(i - 1) % colors.length] },
       },
       scales: { x: { time: true }, y: { range: (u, low, high) => yRange(spec, low, high) } },
       axes: [
@@ -156,9 +156,9 @@ window.argusCharts = (() => {
         {},
         ...spec.series.map((label, j) => ({
           label,
-          stroke: colors[j],
+          stroke: colors[j % colors.length],
           width: 2,
-          fill: spec.series.length === 1 ? `${colors[j]}1f` : undefined,
+          fill: spec.series.length === 1 ? `${colors[j % colors.length]}1f` : undefined,
           points: { show: false },
         })),
       ],

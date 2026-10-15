@@ -164,12 +164,13 @@ fn inventory_conditions(app: &App, snapshot: &HostSnapshot, active: &HashMap<Str
     }
     for container in &inventory.containers {
         let kept = matches!(container.restart_policy.as_str(), "always" | "unless-stopped");
-        let (severity, title) = match (container.state.as_str(), container.health.as_str()) {
-            (state, _) if kept && state != "running" => (Severity::Critical, format!("Container {} stopped", container.name)),
-            ("running", "unhealthy") => (Severity::Warning, format!("Container {} unhealthy", container.name)),
-            _ => continue,
-        };
-        conditions.push(Condition { hold: 2 * MINUTE, ..Condition::new(host, "container", &container.name, severity, title, container.status.clone()) });
+        if kept && container.state != "running" {
+            let title = format!("Container {} stopped", container.name);
+            conditions.push(Condition {
+                hold: 2 * MINUTE,
+                ..Condition::new(host, "container", &container.name, Severity::Critical, title, container.status.clone())
+            });
+        }
     }
     if inventory.reboot_required == Some(true) {
         conditions.push(Condition::new(host, "reboot", "", Severity::Warning, "Reboot required".to_string(), "Installed updates need a restart".to_string()));
@@ -450,7 +451,7 @@ pub fn describe(app: &App) -> Vec<RuleInfo> {
     let fixed = [
         ("Host unreachable", "All hosts", "No report for 90 s", Severity::Critical),
         ("Services", "Every service", "3 failed runs in a row", Severity::Critical),
-        ("Containers", "Docker hosts", "Stopped for 2 min although it should restart, or unhealthy", Severity::Critical),
+        ("Containers", "Docker hosts", "Stopped for 2 min although it should restart", Severity::Critical),
         ("RAID", "mdraid arrays", "Degraded or inactive", Severity::Critical),
         ("SMART", "NVMe drives", "Critical warning set", Severity::Critical),
         ("Systemd", "Linux hosts", "Failed units", Severity::Warning),
@@ -642,20 +643,11 @@ mod tests {
     #[test]
     fn stopped_containers_alert_only_when_they_should_run() {
         let app = app(false);
-        let container = |name: &str, state: &str, health: &str, policy: &str| Container {
-            name: name.into(),
-            state: state.into(),
-            health: health.into(),
-            restart_policy: policy.into(),
-            ..Default::default()
-        };
+        let container =
+            |name: &str, state: &str, policy: &str| Container { name: name.into(), state: state.into(), restart_policy: policy.into(), ..Default::default() };
         let mut report = report("h", "home", Vec::new());
-        report.inventory.containers = vec![
-            container("minecraft", "exited", "", "unless-stopped"),
-            container("dump", "exited", "", "no"),
-            container("web", "running", "unhealthy", "always"),
-            container("db", "running", "healthy", "always"),
-        ];
+        report.inventory.containers =
+            vec![container("minecraft", "exited", "unless-stopped"), container("dump", "exited", "no"), container("db", "running", "always")];
         app.store_report(report.clone(), 0);
         evaluate(&app, 0);
         assert!(alerts(&app).values().all(|a| a.state == AlertState::Pending));
@@ -663,7 +655,6 @@ mod tests {
         evaluate(&app, 3 * MINUTE);
         let all = alerts(&app);
         assert_eq!(all["h|container|minecraft"].severity, Severity::Critical);
-        assert_eq!(all["h|container|web"].severity, Severity::Warning);
         assert!(!all.contains_key("h|container|dump") && !all.contains_key("h|container|db"));
     }
 

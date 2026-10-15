@@ -79,7 +79,7 @@ dashboard should not be reachable from the internet, use two names instead (`arg
   - `rules`: metric thresholds. `metric` is `group|item|field` with `*` as wildcard, `hosts` accepts globs and
     `!exclusions`, `for` is how long the condition must hold. Host unreachable, failing checks, degraded RAID, SMART
     warnings, failed systemd units, pending reboots and containers that stopped although their restart policy is
-    `always` or `unless-stopped` (or report unhealthy) always alert.
+    `always` or `unless-stopped` always alert.
   - `push`: the contact address the push services ask for, the key pair (created on the first start), the
     addresses where phones confirm receipt, an optional daily status message and the registered devices. After three
     notifications within two minutes the node holds further changes and sends one summary two minutes later.
@@ -132,9 +132,11 @@ services:
 
 Set `root = "/host"` and `docker = "/var/lib/docker"` in the agent config. The agent reads the containers from
 Docker's data directory and their CPU and memory from the cgroups, both through the read-only host mount, so it never
-touches the Docker socket. `rslave` makes filesystems mounted after the container started (a late RAID, a remount
-after maintenance) visible to the agent; Docker Desktop does not support it, drop it there. For NVMe SMART add
-`devices: ["/dev/nvme0"]` and `cap_add: [SYS_ADMIN]`.
+touches the Docker socket. Docker keeps health check results only in memory and never writes them to its data
+directory, so Argus shows whether a container runs, not whether it is healthy; watch that with an http check.
+`rslave` makes filesystems mounted after the container started (a late RAID, a remount after maintenance) visible to
+the agent; Docker Desktop does not support it, drop it there. For NVMe SMART add `devices: ["/dev/nvme0"]` and
+`cap_add: [SYS_ADMIN]`.
 
 On a host that runs a node, the node image brings the agent along. Put `agent.toml` next to `argus.json` and the node
 starts the agent as its own process:

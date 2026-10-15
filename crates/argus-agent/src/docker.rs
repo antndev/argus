@@ -35,13 +35,6 @@ struct State {
     exit_code: i64,
     started_at: String,
     finished_at: String,
-    health: Option<Health>,
-}
-
-#[derive(Default, Deserialize)]
-#[serde(rename_all = "PascalCase", default)]
-struct Health {
-    status: String,
 }
 
 #[derive(Default, Deserialize)]
@@ -123,7 +116,6 @@ fn container(stored: &Stored, now: i64) -> Container {
         image: stored.config.image.clone(),
         state: name.to_string(),
         status,
-        health: state.health.as_ref().map(|h| h.status.clone()).unwrap_or_default(),
         restart_policy: String::new(),
         restarts: stored.restart_count,
         cpu: 0.0,
@@ -191,12 +183,12 @@ mod tests {
     fn stored_state_becomes_a_container() {
         let json = r#"{"ID":"abc","Name":"/vaultwarden","RestartCount":2,"Config":{"Image":"vaultwarden/server:1.34"},
             "State":{"Running":true,"Paused":false,"Restarting":false,"Dead":false,"ExitCode":0,
-            "StartedAt":"2026-10-14T08:00:00.123456789Z","FinishedAt":"0001-01-01T00:00:00Z","Health":{"Status":"healthy"}}}"#;
+            "StartedAt":"2026-10-14T08:00:00.123456789Z","FinishedAt":"0001-01-01T00:00:00Z"}}"#;
         let stored: Stored = serde_json::from_str(json).expect("parses");
         let now = rfc3339("2026-10-14T13:30:00Z").expect("time");
         let running = container(&stored, now);
         assert_eq!((running.name.as_str(), running.state.as_str(), running.status.as_str()), ("vaultwarden", "running", "Up 5 hours"));
-        assert_eq!((running.health.as_str(), running.restarts), ("healthy", 2));
+        assert_eq!(running.restarts, 2);
         let exited = r#"{"ID":"b","Name":"/dump","Config":{"Image":"alpine"},"State":{"ExitCode":1,"StartedAt":"2026-10-14T08:00:00Z","FinishedAt":"2026-10-14T13:00:00Z"}}"#;
         let exited = container(&serde_json::from_str(exited).expect("parses"), now);
         assert_eq!((exited.state.as_str(), exited.status.as_str()), ("exited", "Exited (1) 30 minutes ago"));
