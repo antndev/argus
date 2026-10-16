@@ -2,7 +2,7 @@ id = "server-1"            # optional, default is the hostname
 site = "internal"          # which node owns this host, its node name
 role = "Docker host"       # optional free text
 os = "Ubuntu 24.04"        # optional, overrides the name from os-release
-interval = 30              # seconds, or "30s", "5m"
+interval = 30              # seconds, or "30s", "5m"; reports go out on the clock (:00 and :30)
 root = "/host"             # host filesystem prefix when running in a container, "" when native
 agent = "container"        # container | native | addon
 

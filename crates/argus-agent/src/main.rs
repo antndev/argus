@@ -14,7 +14,7 @@ mod platform;
 use std::path::Path;
 use std::process::exit;
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use argus_model::{Check, CheckKind, CheckStatus, IngestReply, Metric, Report};
 use flate2::Compression;
@@ -92,7 +92,6 @@ fn run(config: &Config) -> ! {
     let mut checks = config.checks.clone();
     log(&format!("argus-agent {} reporting to {} node(s) every {} s", env!("CARGO_PKG_VERSION"), nodes.len(), config.interval.as_secs()));
     loop {
-        let start = Instant::now();
         match encode(&report(config, &checks, &mut collector)) {
             Ok(body) => {
                 if let Some(remote) = send(&http, &nodes, &body) {
@@ -105,8 +104,13 @@ fn run(config: &Config) -> ! {
             }
             Err(error) => log(&format!("cannot encode report: {error}")),
         }
-        thread::sleep(config.interval.saturating_sub(start.elapsed()));
+        thread::sleep(until_tick(SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default(), config.interval));
     }
+}
+
+fn until_tick(now: Duration, interval: Duration) -> Duration {
+    let step = interval.as_millis().max(1);
+    Duration::from_millis((step - now.as_millis() % step) as u64)
 }
 
 struct Target {
@@ -225,6 +229,14 @@ fn clear_text(url: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reports_start_on_the_clock() {
+        let interval = Duration::from_secs(30);
+        assert_eq!(until_tick(Duration::from_millis(1_700_000_012_300), interval), Duration::from_millis(27_700));
+        assert_eq!(until_tick(Duration::from_secs(1_700_000_010), interval), interval);
+        assert_eq!(until_tick(Duration::from_secs(301), Duration::from_secs(300)), Duration::from_secs(299));
+    }
 
     #[test]
     fn loopback_is_not_clear_text() {
