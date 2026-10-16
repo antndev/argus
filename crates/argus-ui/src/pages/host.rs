@@ -131,8 +131,12 @@ pub fn HostPage(host_id: String) -> impl IntoView {
     let id = host_id.clone();
     let state = move || host.with(|h| h.as_ref().map(|h| h.state).unwrap_or_default());
     let seen = move || {
-        host.with(|h| h.as_ref().filter(|h| h.last_seen > 0).map(|h| format!("Last report {}", format::ago(h.last_seen as f64, store.clock.get()))))
-            .unwrap_or_default()
+        host.with(|h| {
+            h.as_ref()
+                .filter(|h| h.last_seen > 0)
+                .map(|h| if h.connected { "Connected".to_string() } else { format!("Last report {}", format::ago(h.last_seen as f64, store.clock.get())) })
+        })
+        .unwrap_or_default()
     };
     let about = move || {
         host.with(|h| {

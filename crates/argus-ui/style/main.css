@@ -1603,6 +1603,10 @@ td .sev {
   color: var(--text-3);
 }
 
+.login-field input.masked {
+  letter-spacing: 0.16em;
+}
+
 .login-eye {
   display: grid;
   place-items: center;
@@ -1621,6 +1625,25 @@ td .sev {
 .login-card .btn {
   width: 100%;
   height: 38px;
+}
+
+.login-card .btn[aria-busy="true"] {
+  opacity: 1;
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .login-note {

@@ -88,6 +88,8 @@ pub async fn ingest_stream(State(app): State<Arc<App>>, headers: HeaderMap, upgr
 }
 
 async fn stream_reports(app: Arc<App>, token: String, mut socket: WebSocket) {
+    let Some(host) = agent(&app, &token) else { return };
+    app.link(&host, true);
     while let Some(Ok(message)) = socket.recv().await {
         let Message::Binary(body) = message else { continue };
         let reply = unzip(&body).ok_or((StatusCode::BAD_REQUEST, String::new())).and_then(|raw| accept(&app, &token, &raw));
@@ -105,6 +107,7 @@ async fn stream_reports(app: Arc<App>, token: String, mut socket: WebSocket) {
             break;
         }
     }
+    app.link(&host, false);
 }
 
 fn host_state(alerts: &[Alert], host: &str) -> Severity {
@@ -140,6 +143,7 @@ pub async fn overview(State(app): State<Arc<App>>) -> Json<Overview> {
                 state,
                 owner,
                 last_seen: snapshot.last_seen,
+                connected: app.connected(&report.host.id),
                 latest: report.metrics,
                 inventory: report.inventory,
                 checks: report.checks,

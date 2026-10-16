@@ -64,6 +64,7 @@ pub fn HostsPage() -> impl IntoView {
                         match h.state {
                             Severity::Critical => format!("{role}, needs attention"),
                             Severity::Warning => format!("{role}, warning"),
+                            _ if h.connected => format!("{role}, connected"),
                             _ => format!("{role}, {}", format::ago(h.last_seen as f64, store.clock.get())),
                         }
                     })

@@ -37,6 +37,7 @@ pub struct PeerState {
     pub last_sync: Option<i64>,
     pub cursor: i64,
     pub streams: u32,
+    pub links: Vec<String>,
 }
 
 pub struct App {
@@ -56,6 +57,7 @@ pub struct App {
     pending: Mutex<HashSet<String>>,
     logins: Mutex<(i64, u32)>,
     pub changes: tokio::sync::watch::Sender<u64>,
+    links: Mutex<BTreeMap<String, u32>>,
     pub argon: tokio::sync::Semaphore,
     pub started: i64,
 }
@@ -91,6 +93,7 @@ impl App {
             pending: Mutex::new(HashSet::new()),
             logins: Mutex::new((0, 0)),
             changes: tokio::sync::watch::Sender::new(0),
+            links: Mutex::new(BTreeMap::new()),
             argon: tokio::sync::Semaphore::new(1),
             started: now_ms(),
         }
@@ -207,6 +210,30 @@ impl App {
 
     pub fn changed(&self) {
         self.changes.send_modify(|count| *count = count.wrapping_add(1));
+    }
+
+    pub fn link(&self, host: &str, open: bool) {
+        {
+            let mut links = lock(&self.links);
+            let count = links.entry(host.to_string()).or_default();
+            *count = if open { *count + 1 } else { count.saturating_sub(1) };
+            if *count == 0 {
+                links.remove(host);
+            }
+        }
+        self.changed();
+    }
+
+    pub fn links(&self) -> Vec<String> {
+        lock(&self.links).keys().cloned().collect()
+    }
+
+    pub fn connected(&self, host: &str) -> bool {
+        if lock(&self.links).contains_key(host) {
+            return true;
+        }
+        let peer = self.peer_state();
+        peer.streams > 0 && peer.links.iter().any(|h| h == host)
     }
 
     pub fn store_report(&self, mut report: Report, now: i64) {

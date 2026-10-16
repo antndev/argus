@@ -180,6 +180,8 @@ pub fn HostCard(id: String, index: usize) -> impl IntoView {
             h.as_ref().map(|h| {
                 if h.last_seen == 0 {
                     "Start the agent with its token".to_string()
+                } else if h.connected {
+                    "Connected".to_string()
                 } else {
                     format!("Last report {}", format::ago(h.last_seen as f64, store.clock.get()))
                 }

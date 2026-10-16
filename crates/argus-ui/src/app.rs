@@ -63,11 +63,13 @@ fn Login() -> impl IntoView {
     let password = RwSignal::new(String::new());
     let repeat = RwSignal::new(String::new());
     let error = RwSignal::new(String::new());
+    let bad = RwSignal::new(false);
     let shake = RwSignal::new(0u32);
     let busy = RwSignal::new(false);
     let reveal = RwSignal::new(false);
     let fail = move |text: String| {
         let _ = error.try_set(text);
+        let _ = bad.try_set(true);
         let _ = shake.try_update(|n| *n += 1);
     };
     let submit = move |event: SubmitEvent| {
@@ -96,7 +98,7 @@ fn Login() -> impl IntoView {
                     store.refresh();
                 }
                 Err(failure) => {
-                    fail(if failure.status == 401 { "Wrong password".to_string() } else { format::capitalize(&failure.text) });
+                    fail(if failure.status == 401 { String::new() } else { format::capitalize(&failure.text) });
                     store.check_session();
                 }
             }
@@ -105,8 +107,9 @@ fn Login() -> impl IntoView {
     };
     let field = move |value: RwSignal<String>, placeholder: &'static str, autocomplete: &'static str, eye: bool| {
         view! {
-            <div class="login-field" class:bad=move || !error.get().is_empty()>
+            <div class="login-field" class:bad=move || bad.get()>
                 <input
+                    class:masked=move || !reveal.get() && !value.get().is_empty()
                     type=move || if reveal.get() { "text" } else { "password" }
                     autocomplete=autocomplete
                     placeholder=placeholder
@@ -117,6 +120,7 @@ fn Login() -> impl IntoView {
                     on:input=move |ev| {
                         value.set(event_target_value(&ev));
                         error.set(String::new());
+                        bad.set(false);
                     }
                 />
                 {eye.then(|| view! {
@@ -138,8 +142,14 @@ fn Login() -> impl IntoView {
     };
     let note = move || view! { <p class="login-note" role="alert">{move || error.get()}</p> };
     let ready = move || !password.get().is_empty() && (store.gate.get() != "setup" || !repeat.get().is_empty());
-    let form = move || {
-        match store.gate.get().as_str() {
+    let submit_button = move |label: &'static str| {
+        view! {
+            <button class="btn primary" type="submit" aria-busy=move || busy.get().to_string() aria-label=label disabled=move || !ready() || busy.get()>
+                {move || if busy.get() { view! { <span class="spinner" aria-hidden="true"></span> }.into_any() } else { label.into_any() }}
+            </button>
+        }
+    };
+    let form = move || match store.gate.get().as_str() {
         "pending" => view! {
             <h1>"Waiting for the internal node"</h1>
             <p>"This node takes its password from the internal node with the next sync."</p>
@@ -158,18 +168,17 @@ fn Login() -> impl IntoView {
                 {field(password, "Password", "new-password", true)}
                 {field(repeat, "Repeat password", "new-password", false)}
             </div>
-            <button class="btn primary" type="submit" disabled=move || !ready() || busy.get()>{move || if busy.get() { "Saving" } else { "Create password" }}</button>
+            {submit_button("Create password")}
             {note()}
         }
         .into_any(),
         _ => view! {
-            <h1>"Welcome back"</h1>
+            <h1>"Welcome!"</h1>
             <div class=fields>{field(password, "Password", "current-password", true)}</div>
-            <button class="btn primary" type="submit" disabled=move || !ready() || busy.get()>{move || if busy.get() { "Signing in" } else { "Sign in" }}</button>
+            {submit_button("Sign in")}
             {note()}
         }
         .into_any(),
-    }
     };
     view! {
         <div class="login">

@@ -58,6 +58,7 @@ fn build(app: &App, now: i64, cursor: i64, with_samples: bool) -> SyncPayload {
         config: serde_json::to_value(&config.shared).ok(),
         history_cleared: db::history_cleared(&db),
         login: config.initiates_sync().then(|| crate::session::export(&db)),
+        links: app.links(),
     }
 }
 
@@ -95,6 +96,7 @@ fn newer<T>(local: Option<&T>, incoming: &T, stamp: impl Fn(&T) -> i64) -> bool 
 
 pub fn merge(app: &App, payload: SyncPayload, initiator: bool) {
     adopt(app, payload.config.clone(), initiator);
+    app.peer_state().links = payload.links.clone();
     {
         let mut db = app.db();
         let alerts: HashMap<String, Alert> = db::alerts(&db).into_iter().map(|a| (a.key.clone(), a)).collect();
@@ -371,6 +373,8 @@ mod tests {
             let reply = peer.request(&format!("{base}/api/v1/sync"), "secret-secret-secret", payload, Duration::from_secs(5)).expect("sync");
             assert!(serde_json::from_slice::<SyncPayload>(&reply).expect("payload").hosts.iter().any(|s| s.report.host.id == "h"));
             assert_eq!(app.peer_state().streams, 1);
+            assert!(app.connected("h"));
+            assert_eq!(serde_json::from_slice::<SyncPayload>(&reply).expect("payload").links, ["h"]);
             agent.request(&ingest, "agent-token-0123456789", body, Duration::from_secs(5)).expect("second report");
             assert_eq!(peer.wait(Duration::from_secs(5)), Ok(true));
             assert!(Link::default().request(&ingest, "wrong-token-0123456789", Vec::new(), Duration::from_secs(5)).is_err());

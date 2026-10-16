@@ -238,6 +238,7 @@ pub struct SyncPayload {
     pub config: Option<serde_json::Value>,
     pub history_cleared: i64,
     pub login: Option<LoginSync>,
+    pub links: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -306,6 +307,7 @@ pub struct NodeStatus {
 pub struct HostSummary {
     pub info: HostInfo,
     pub last_seen: i64,
+    pub connected: bool,
     pub state: Severity,
     pub owner: String,
     pub latest: Vec<Metric>,
