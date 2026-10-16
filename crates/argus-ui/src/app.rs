@@ -136,13 +136,7 @@ fn Login() -> impl IntoView {
         n if n % 2 == 1 => "login-fields shake-a",
         _ => "login-fields shake-b",
     };
-    let note = move |hint: &'static str| {
-        view! {
-            <p class="login-note" class:error=move || !error.get().is_empty() role="alert">
-                {move || Some(error.get()).filter(|text| !text.is_empty()).unwrap_or_else(|| hint.to_string())}
-            </p>
-        }
-    };
+    let note = move || view! { <p class="login-note" role="alert">{move || error.get()}</p> };
     let ready = move || !password.get().is_empty() && (store.gate.get() != "setup" || !repeat.get().is_empty());
     let form = move || {
         match store.gate.get().as_str() {
@@ -165,14 +159,14 @@ fn Login() -> impl IntoView {
                 {field(repeat, "Repeat password", "new-password", false)}
             </div>
             <button class="btn primary" type="submit" disabled=move || !ready() || busy.get()>{move || if busy.get() { "Saving" } else { "Create password" }}</button>
-            {note("At least 10 characters")}
+            {note()}
         }
         .into_any(),
         _ => view! {
             <h1>"Welcome back"</h1>
             <div class=fields>{field(password, "Password", "current-password", true)}</div>
             <button class="btn primary" type="submit" disabled=move || !ready() || busy.get()>{move || if busy.get() { "Signing in" } else { "Sign in" }}</button>
-            {note("")}
+            {note()}
         }
         .into_any(),
     }

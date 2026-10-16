@@ -1635,10 +1635,6 @@ td .sev {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  color: var(--text-3);
-}
-
-.login-note.error {
   color: var(--err);
 }
 
