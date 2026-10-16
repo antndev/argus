@@ -31,7 +31,7 @@ pub fn HostsPage() -> impl IntoView {
         store
             .hosts()
             .into_iter()
-            .filter(|h| query.is_empty() || h.info.id.to_lowercase().contains(&query) || h.info.role.to_lowercase().contains(&query))
+            .filter(|h| query.is_empty() || h.info.id.to_lowercase().contains(&query) || h.info.os.to_lowercase().contains(&query))
             .map(|h| h.info.id)
             .collect::<Vec<_>>()
     });
@@ -60,12 +60,12 @@ pub fn HostsPage() -> impl IntoView {
                         if h.last_seen == 0 {
                             return "Waiting for the first report".to_string();
                         }
-                        let role = if h.info.role.is_empty() { format::capitalize(&h.info.os) } else { h.info.role.clone() };
+                        let os = format::capitalize(&h.info.os);
                         match h.state {
-                            Severity::Critical => format!("{role} · Needs attention"),
-                            Severity::Warning => format!("{role} · Warning"),
-                            _ if h.connected => format!("{role} · Connected"),
-                            _ => format!("{role} · {}", format::ago(h.last_seen as f64, store.clock.get())),
+                            Severity::Critical => format!("{os} · Needs attention"),
+                            Severity::Warning => format!("{os} · Warning"),
+                            _ if h.connected => format!("{os} · Connected"),
+                            _ => format!("{os} · {}", format::ago(h.last_seen as f64, store.clock.get())),
                         }
                     })
                     .unwrap_or_default()

@@ -139,11 +139,8 @@ pub fn HostPage(host_id: String) -> impl IntoView {
         .unwrap_or_default()
     };
     let about = move || {
-        host.with(|h| {
-            h.as_ref()
-                .map(|h| [h.info.role.clone(), h.info.os.clone(), h.info.arch.clone()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(", "))
-        })
-        .unwrap_or_default()
+        host.with(|h| h.as_ref().map(|h| [h.info.os.clone(), h.info.arch.clone()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(", ")))
+            .unwrap_or_default()
     };
     let filesystems = move || {
         host.with(|h| {
