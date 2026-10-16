@@ -920,7 +920,7 @@ fn retention(store: Store) -> impl IntoView {
         <div class="card plain">
             <div class="card-grid">
                 {keep(store, "Keep every report", "Days with full detail.", "raw")}
-                {keep(store, "Keep 5 minute averages", "Days of 5 minute points.", "medium")}
+                {keep(store, "Keep 5-minute averages", "Days of 5-minute points.", "medium")}
                 {keep(store, "Keep hourly averages", "Days of hourly points.", "long")}
                 {keep(store, "Keep daily averages", "Days of daily points.", "daily")}
             </div>

@@ -54,7 +54,7 @@ pub fn ChecksPage() -> impl IntoView {
             .map(|row| {
                 let strip = history.with(|map| map.get(&(row.host.clone(), row.check.name.clone())).cloned());
                 let runs = if row.standalone() {
-                    let via = if row.runner.is_empty() { "no agent yet".to_string() } else { format!("via {}", row.runner) };
+                    let via = if row.runner.is_empty() { "No agent yet".to_string() } else { format!("Run by {}", row.runner) };
                     view! { <span>"Standalone"</span><span class="sub">{via}</span> }.into_any()
                 } else {
                     view! { <a class="link" href=crate::route::Route::Host(row.host.clone()).href()>{row.host.clone()}</a> }.into_any()

@@ -62,10 +62,10 @@ pub fn HostsPage() -> impl IntoView {
                         }
                         let role = if h.info.role.is_empty() { format::capitalize(&h.info.os) } else { h.info.role.clone() };
                         match h.state {
-                            Severity::Critical => format!("{role}, needs attention"),
-                            Severity::Warning => format!("{role}, warning"),
-                            _ if h.connected => format!("{role}, connected"),
-                            _ => format!("{role}, {}", format::ago(h.last_seen as f64, store.clock.get())),
+                            Severity::Critical => format!("{role} · Needs attention"),
+                            Severity::Warning => format!("{role} · Warning"),
+                            _ if h.connected => format!("{role} · Connected"),
+                            _ => format!("{role} · {}", format::ago(h.last_seen as f64, store.clock.get())),
                         }
                     })
                     .unwrap_or_default()

@@ -84,7 +84,7 @@ dashboard should not be reachable from the internet, use two names instead (`arg
   - `push`: the contact address the push services ask for, the key pair (created on the first start), the
     addresses where phones confirm receipt, an optional daily status message and the registered devices. After three
     notifications within two minutes the node holds further changes and sends one summary two minutes later.
-  - `backup_max_age`, `retention` (every report, 5 minute, hourly and daily averages) and the host `order`.
+  - `backup_max_age`, `retention` (every report, 5-minute, hourly and daily averages) and the host `order`.
   - `connection`: `interval` (default) or `persistent`, see below.
 
 Removing a host from `agents` also removes it from the dashboard. Its history stays until retention removes it.

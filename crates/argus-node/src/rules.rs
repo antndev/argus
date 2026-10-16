@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use argus_model::{Alert, AlertState, BackupSchedule, BackupState, CheckStatus, Event, HostSnapshot, Limit, Metric, RuleInfo, SERVICES_HOST, Severity};
 
-use crate::config::Rule;
+use crate::config::{Config, Rule};
 use crate::util::{MINUTE, SECOND, duration_text, glob, matches_hosts, random_id};
 use crate::{App, db, notify};
 
@@ -299,7 +299,8 @@ pub fn evaluate(app: &App, now: i64) {
                 1 => format!("{since}, no reports from 1 host"),
                 n => format!("{since}, no reports from {n} hosts"),
             };
-            conditions.push(Condition::new(&peer.name, "node", "", Severity::Critical, format!("{} node unreachable", peer.name), detail));
+            let title = format!("{} unreachable", peer_role(&config));
+            conditions.push(Condition::new(&peer.name, "node", "", Severity::Critical, title, detail));
         }
     }
     let has_backups = config.zerobyte.is_some() || !schedules.is_empty();
@@ -416,6 +417,10 @@ fn reconcile(app: &App, now: i64, conditions: Vec<Condition>, hosts: &HashSet<St
     }
 }
 
+fn peer_role(config: &Config) -> &'static str {
+    if config.initiates_sync() { "External node" } else { "Internal node" }
+}
+
 pub fn limits(app: &App, host: &str, metrics: &[Metric]) -> Vec<Limit> {
     let config = app.config();
     metrics
@@ -467,10 +472,10 @@ pub fn describe(app: &App) -> Vec<RuleInfo> {
         condition: condition.to_string(),
         severity,
     }));
-    if let Some(peer) = &config.peer {
+    if config.peer.is_some() {
         rules.push(RuleInfo {
             name: "Node".to_string(),
-            scope: format!("{} node", peer.name),
+            scope: peer_role(&config).to_string(),
             condition: "No sync for 60 s".to_string(),
             severity: Severity::Critical,
         });

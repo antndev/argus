@@ -312,8 +312,8 @@ mod tests {
         assert_eq!(many.len(), 1);
         assert_eq!(many[0].priority, 5);
         assert!(many[0].message.starts_with("a: x\nResolved, b: x"));
-        let node = Alert { host: "vps".into(), rule: "node".into(), title: "vps node unreachable".into(), ..Default::default() };
-        assert_eq!(compose(&[(node, true)], 0)[0].title, "vps node unreachable");
+        let node = Alert { host: "vps".into(), rule: "node".into(), title: "External node unreachable".into(), ..Default::default() };
+        assert_eq!(compose(&[(node, true)], 0)[0].title, "External node unreachable");
     }
 
     #[test]
