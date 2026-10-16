@@ -183,6 +183,7 @@ pub async fn serve_stream(State(app): State<Arc<App>>, headers: HeaderMap, upgra
 
 async fn stream(app: Arc<App>, token: String, mut socket: WebSocket) {
     let mut changes = app.changes.subscribe();
+    app.peer_state().streams += 1;
     loop {
         tokio::select! {
             message = socket.recv() => {
@@ -211,6 +212,8 @@ async fn stream(app: Arc<App>, token: String, mut socket: WebSocket) {
             }
         }
     }
+    let mut state = app.peer_state();
+    state.streams = state.streams.saturating_sub(1);
 }
 
 fn exchange(url: &str, token: &str, payload: &SyncPayload) -> Result<SyncPayload, String> {
@@ -270,6 +273,7 @@ pub fn run(app: &App, wake: &Receiver<()>) {
     let mut link = Link::default();
     let mut changes = app.changes.subscribe();
     loop {
+        app.peer_state().streams = u32::from(link.connected());
         let Some((peer, url)) = app.config().peer.clone().and_then(|p| p.url.clone().map(|url| (p, url))) else {
             link.close();
             let _ = wake.recv_timeout(INTERVAL);
@@ -313,6 +317,7 @@ pub fn run(app: &App, wake: &Receiver<()>) {
                 }
             }
         }
+        app.peer_state().streams = u32::from(link.connected());
         if persistent && link.connected() {
             settle(&mut link, &peer, &mut changes, wake);
         } else {
@@ -365,6 +370,7 @@ mod tests {
             let payload = serde_json::to_vec(&SyncPayload::default()).expect("json");
             let reply = peer.request(&format!("{base}/api/v1/sync"), "secret-secret-secret", payload, Duration::from_secs(5)).expect("sync");
             assert!(serde_json::from_slice::<SyncPayload>(&reply).expect("payload").hosts.iter().any(|s| s.report.host.id == "h"));
+            assert_eq!(app.peer_state().streams, 1);
             agent.request(&ingest, "agent-token-0123456789", body, Duration::from_secs(5)).expect("second report");
             assert_eq!(peer.wait(Duration::from_secs(5)), Ok(true));
             assert!(Link::default().request(&ingest, "wrong-token-0123456789", Vec::new(), Duration::from_secs(5)).is_err());

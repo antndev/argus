@@ -156,14 +156,16 @@ pub async fn overview(State(app): State<Arc<App>>) -> Json<Overview> {
     }));
     hosts.sort_by_key(|h| config.shared.order.iter().position(|id| *id == h.info.id).unwrap_or(usize::MAX));
     let internal = config.peer.is_none() || config.initiates_sync();
-    let mut nodes = vec![NodeStatus { name: me, this: true, internal, reachable: true, last_sync: app.peer_state().last_sync }];
+    let peer_state = app.peer_state().clone();
+    let mut nodes = vec![NodeStatus { name: me, this: true, internal, reachable: true, connected: false, last_sync: peer_state.last_sync }];
     if let Some(peer) = &config.peer {
         nodes.push(NodeStatus {
             name: peer.name.clone(),
             this: false,
             internal: !internal,
             reachable: !app.peer_down(now),
-            last_sync: app.peer_state().last_sync,
+            connected: peer_state.streams > 0,
+            last_sync: peer_state.last_sync,
         });
     }
     let known = app.services.lock().unwrap_or_else(|p| p.into_inner()).clone();

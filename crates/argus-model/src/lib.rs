@@ -297,6 +297,7 @@ pub struct NodeStatus {
     pub this: bool,
     pub internal: bool,
     pub reachable: bool,
+    pub connected: bool,
     pub last_sync: Option<i64>,
 }
 

@@ -237,10 +237,11 @@ fn Sidebar() -> impl IntoView {
                 let detail = if node.this {
                     "This node".to_string()
                 } else {
-                    match (node.reachable, node.last_sync) {
-                        (true, Some(at)) => format!("Synced {}", format::ago(at as f64, store.clock.get_untracked())),
-                        (false, Some(at)) => format!("Unreachable since {}", format::ago(at as f64, store.clock.get_untracked())),
-                        (_, None) => "Never synced".to_string(),
+                    match (node.reachable, node.connected, node.last_sync) {
+                        (true, true, _) => "Connected".to_string(),
+                        (true, false, Some(at)) => format!("Synced {}", format::ago(at as f64, store.clock.get_untracked())),
+                        (false, _, Some(at)) => format!("Unreachable since {}", format::ago(at as f64, store.clock.get_untracked())),
+                        (_, _, None) => "Never synced".to_string(),
                     }
                 };
                 let role = if node.internal { "Internal node" } else { "External node" };

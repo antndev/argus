@@ -1837,7 +1837,7 @@ td .sev {
 }
 
 .cat.sign-out {
-  margin-top: 12px;
+  margin-top: auto;
   color: var(--text-2);
 }
 

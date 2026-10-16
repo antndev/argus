@@ -299,7 +299,11 @@ fn list_input(store: Store, path: String, placeholder: &'static str, fallback: O
 fn select_input(store: Store, path: String, options: &'static [(&'static str, &'static str)]) -> impl IntoView {
     let shown = path.clone();
     view! {
-        <select class="input" prop:value=move || text(store, &shown) on:change=move |ev| write(store, &path, Some(json!(event_target_value(&ev))))>
+        <select
+            class="input"
+            prop:value=move || Some(text(store, &shown)).filter(|value| !value.is_empty()).unwrap_or_else(|| options[0].0.to_string())
+            on:change=move |ev| write(store, &path, Some(json!(event_target_value(&ev))))
+        >
             {options.iter().map(|(value, label)| view! { <option value=*value>{*label}</option> }).collect_view()}
         </select>
     }

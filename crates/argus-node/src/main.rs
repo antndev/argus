@@ -32,10 +32,11 @@ use crate::util::{MINUTE, SECOND, now_ms, random_id, sha256_hex};
 
 pub const PEER_TIMEOUT: i64 = 60 * SECOND;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct PeerState {
     pub last_sync: Option<i64>,
     pub cursor: i64,
+    pub streams: u32,
 }
 
 pub struct App {
