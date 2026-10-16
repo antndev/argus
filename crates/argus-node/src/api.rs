@@ -156,7 +156,7 @@ pub struct SeriesQuery {
 pub async fn series(State(app): State<Arc<App>>, Query(query): Query<SeriesQuery>) -> Json<SeriesData> {
     let now = now_ms();
     let range = query.range.map_or(6 * HOUR, |seconds| seconds * 1_000).clamp(10 * MINUTE, 731 * DAY);
-    let keys: Vec<String> = query.keys.split(',').map(str::to_string).filter(|k| !k.is_empty()).take(16).collect();
+    let keys: Vec<String> = query.keys.split(',').map(str::to_string).filter(|k| !k.is_empty()).take(argus_model::MAX_SERIES).collect();
     let retention = app.config().shared.retention.clone();
     Json(db::query_series(&app.db(), &query.host, &keys, now - range, now, &retention))
 }

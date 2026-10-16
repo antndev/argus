@@ -44,7 +44,10 @@ fn chart_specs(host: &HostSummary) -> Vec<ChartSpec> {
             return spec;
         }
         names.sort_unstable();
-        names.into_iter().fold(spec.scaled("Containers", key("docker", "*", field), share), |spec, name| spec.detail(name, key("docker", name, field), share))
+        names
+            .into_iter()
+            .take(argus_model::MAX_SERIES - 2)
+            .fold(spec.scaled("Containers", key("docker", "*", field), share), |spec, name| spec.detail(name, key("docker", name, field), share))
     };
     let cpu = containers(cpu, "cpu", 1.0 / f64::from(host.info.cores));
     let cpu = threshold(cpu, limit(host, "cpu", "", "total"), |v| format!("Total alert at {v}%"));

@@ -4,6 +4,7 @@ use std::time::Duration;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub const KEY_SEPARATOR: char = '|';
+pub const MAX_SERIES: usize = 128;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]

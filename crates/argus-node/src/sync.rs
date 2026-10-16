@@ -18,6 +18,12 @@ use crate::{App, db, log};
 const SAMPLE_LIMIT: usize = 50_000;
 const MAX_PAYLOAD: usize = 64 * 1024 * 1024;
 const INTERVAL: Duration = Duration::from_secs(15);
+const OFFSET_MS: i64 = 5_000;
+
+fn until_tick(now: i64) -> Duration {
+    let step = INTERVAL.as_millis() as i64;
+    Duration::from_millis((step - (now - OFFSET_MS).rem_euclid(step)) as u64)
+}
 
 pub fn bearer(headers: &HeaderMap) -> Option<&str> {
     headers.get(header::AUTHORIZATION)?.to_str().ok()?.strip_prefix("Bearer ").map(str::trim)
@@ -201,7 +207,7 @@ pub fn run(app: &App, wake: &Receiver<()>) {
                 }
             }
         }
-        let _ = wake.recv_timeout(INTERVAL);
+        let _ = wake.recv_timeout(until_tick(now_ms()));
     }
 }
 
@@ -210,6 +216,13 @@ mod tests {
     use super::*;
     use crate::config::{Config, Peer};
     use argus_model::{AlertState, HostInfo, HostSnapshot, Report, Sample};
+
+    #[test]
+    fn syncs_start_five_seconds_after_the_agents() {
+        assert_eq!(until_tick(0), Duration::from_secs(5));
+        assert_eq!(until_tick(5_000), Duration::from_secs(15));
+        assert_eq!(until_tick(31_000), Duration::from_secs(4));
+    }
 
     fn app(name: &str) -> App {
         let mut config = Config { name: name.into(), ..Default::default() };

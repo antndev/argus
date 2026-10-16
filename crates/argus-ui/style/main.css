@@ -1114,6 +1114,13 @@ td .sev {
   flex-wrap: wrap;
 }
 
+.panel.with-toggle .legend {
+  height: 40px;
+  align-content: flex-start;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
 .legend button {
   display: inline-flex;
   align-items: center;

@@ -242,7 +242,7 @@ pub fn Chart(spec: ChartSpec) -> impl IntoView {
     };
 
     view! {
-        <section class="panel">
+        <section class="panel" class:with-toggle=splits>
             <header class="panel-head">
                 <h3>{title}</h3>
                 {splits.then(|| view! {
