@@ -152,10 +152,6 @@ fn Login() -> impl IntoView {
     view! {
         <div class="login">
             <form class="login-card" on:submit=submit>
-                <div class="login-brand">
-                    <span class="logo" inner_html=icons::LOGO></span>
-                    <span>"Argus"</span>
-                </div>
                 {form}
             </form>
         </div>

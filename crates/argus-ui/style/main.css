@@ -1541,20 +1541,6 @@ td .sev {
   animation: rise 0.45s var(--ease) both;
 }
 
-.login-brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 4px;
-  font-size: 17px;
-  font-weight: 600;
-}
-
-.login-brand .logo {
-  width: 28px;
-  height: 28px;
-}
-
 .login-card h1 {
   font-size: 20px;
   font-weight: 600;
