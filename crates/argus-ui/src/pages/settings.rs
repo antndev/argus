@@ -696,7 +696,7 @@ extern "C" {
 fn push_template() -> Value {
     let origin = origin();
     let subject = if origin.starts_with("https://") { origin.clone() } else { String::new() };
-    json!({ "subject": subject, "receipt_urls": [origin], "status_every": "24h", "devices": [] })
+    json!({ "subject": subject, "receipt_urls": [origin], "devices": [] })
 }
 
 fn this_device(store: Store) -> impl IntoView {
