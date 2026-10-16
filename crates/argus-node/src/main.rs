@@ -54,6 +54,7 @@ pub struct App {
     queue: Mutex<Option<Sender<Message>>>,
     pending: Mutex<HashSet<String>>,
     logins: Mutex<(i64, u32)>,
+    pub changes: tokio::sync::watch::Sender<u64>,
     pub argon: tokio::sync::Semaphore,
     pub started: i64,
 }
@@ -88,6 +89,7 @@ impl App {
             queue: Mutex::new(None),
             pending: Mutex::new(HashSet::new()),
             logins: Mutex::new((0, 0)),
+            changes: tokio::sync::watch::Sender::new(0),
             argon: tokio::sync::Semaphore::new(1),
             started: now_ms(),
         }
@@ -199,6 +201,11 @@ impl App {
         if let Some(sender) = lock(&self.wake).as_ref() {
             let _ = sender.send(());
         }
+        self.changed();
+    }
+
+    pub fn changed(&self) {
+        self.changes.send_modify(|count| *count = count.wrapping_add(1));
     }
 
     pub fn store_report(&self, mut report: Report, now: i64) {
@@ -248,6 +255,7 @@ impl App {
             let _ = db::save_host(&db, &snapshot);
         }
         self.put_snapshot(snapshot);
+        self.changed();
     }
 }
 
@@ -383,8 +391,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route_layer(axum::middleware::from_fn_with_state(app.clone(), session::enabled));
     Router::new()
         .route("/api/v1/health", get(|| async { "ok" }))
-        .route("/api/v1/ingest", post(api::ingest))
-        .route("/api/v1/sync", post(sync::serve))
+        .route("/api/v1/ingest", post(api::ingest).get(api::ingest_stream))
+        .route("/api/v1/sync", post(sync::serve).get(sync::serve_stream))
         .route("/api/v1/hooks/zerobyte/{token}", post(zerobyte::webhook))
         .merge(dashboard)
         .route("/api/v1/push/receipt/{id}", post(notify::receipt))

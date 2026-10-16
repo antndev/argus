@@ -437,6 +437,7 @@ pub struct JsonAssertion {
 #[serde(default)]
 pub struct IngestReply {
     pub checks: Vec<Check>,
+    pub persistent: bool,
 }
 
 fn default_timeout() -> Duration {

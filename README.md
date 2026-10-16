@@ -85,8 +85,20 @@ dashboard should not be reachable from the internet, use two names instead (`arg
     addresses where phones confirm receipt, an optional daily status message and the registered devices. After three
     notifications within two minutes the node holds further changes and sends one summary two minutes later.
   - `backup_max_age`, `retention` (every report, 5 minute, hourly and daily averages) and the host `order`.
+  - `connection`: `interval` (default) or `persistent`, see below.
 
 Removing a host from `agents` also removes it from the dashboard. Its history stays until retention removes it.
+
+### Connections
+
+With `interval` every agent sends each report as its own HTTPS request and the internal node syncs every 15 seconds.
+With `persistent` every agent keeps one WebSocket open to each node and the internal node keeps one open to the
+external node. Agents still report at their `interval`, but the nodes pass on every new report, alert and setting
+at once instead of waiting for the next sync. A dropped connection is rebuilt on its own, with pauses that grow up to
+32 seconds between attempts; until then reports and syncs go by request as with `interval`, so nothing is lost and
+no alert fires just because a connection dropped. Host and node alerts still need 90 and 60 seconds without any
+data. Both modes use the same paths (`/api/v1/ingest`, `/api/v1/sync`), so a reverse proxy needs no change as long
+as it passes WebSocket upgrades, which Caddy does by default.
 
 Run the node behind a reverse proxy that terminates TLS. With one name for both nodes a plain
 `reverse_proxy argus-node:8090` is enough. Example with Caddy for an external node whose dashboard stays private:

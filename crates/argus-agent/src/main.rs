@@ -16,6 +16,7 @@ use std::process::exit;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use argus_link::Link;
 use argus_model::{Check, CheckKind, CheckStatus, IngestReply, Metric, Report};
 use flate2::Compression;
 use flate2::write::GzEncoder;
@@ -78,10 +79,18 @@ fn run(config: &Config) -> ! {
     if config.nodes.is_empty() {
         fail("no nodes configured");
     }
-    let nodes: Vec<Target> = config
+    let mut nodes: Vec<Target> = config
         .nodes
         .iter()
-        .map(|node| node.resolve_token().map(|token| Target { url: format!("{}/api/v1/ingest", node.url.trim_end_matches('/')), token, checks: node.checks }))
+        .map(|node| {
+            node.resolve_token().map(|token| Target {
+                url: format!("{}/api/v1/ingest", node.url.trim_end_matches('/')),
+                token,
+                checks: node.checks,
+                persistent: false,
+                link: Link::default(),
+            })
+        })
         .collect::<Result<_, _>>()
         .unwrap_or_else(|error| fail(&error));
     for Target { url, .. } in nodes.iter().filter(|node| clear_text(&node.url)) {
@@ -94,7 +103,7 @@ fn run(config: &Config) -> ! {
     loop {
         match encode(&report(config, &checks, &mut collector)) {
             Ok(body) => {
-                if let Some(remote) = send(&http, &nodes, &body) {
+                if let Some(remote) = send(&http, &mut nodes, &body) {
                     let merged = merge_checks(config, remote);
                     if merged != checks {
                         log(&format!("running {} checks, {} from the node", merged.len(), merged.len() - config.checks.len()));
@@ -117,6 +126,8 @@ struct Target {
     url: String,
     token: String,
     checks: bool,
+    persistent: bool,
+    link: Link,
 }
 
 const MAX_REMOTE_CHECKS: usize = 64;
@@ -158,30 +169,20 @@ fn encode(report: &Report) -> std::io::Result<Vec<u8>> {
     encoder.finish()
 }
 
-fn send(http: &ureq::Agent, nodes: &[Target], body: &[u8]) -> Option<Vec<Check>> {
+fn send(http: &ureq::Agent, nodes: &mut [Target], body: &[u8]) -> Option<Vec<Check>> {
     thread::scope(|scope| {
         let replies: Vec<_> = nodes
-            .iter()
+            .iter_mut()
             .map(|node| {
-                scope.spawn(move || {
-                    let sent = http
-                        .post(&node.url)
-                        .header("Content-Type", "application/json")
-                        .header("Content-Encoding", "gzip")
-                        .header("Authorization", format!("Bearer {}", node.token))
-                        .send(body);
-                    let reply = match sent {
-                        Ok(mut response) => {
-                            let status = response.status().as_u16();
-                            let body = response.body_mut().with_config().limit(1024 * 1024).read_to_vec().unwrap_or_default();
-                            node_checks(node.checks, status, &body)
-                        }
-                        Err(error) => Err(error.to_string()),
-                    };
-                    reply.unwrap_or_else(|error| {
+                scope.spawn(move || match deliver(http, node, body) {
+                    Ok(reply) => {
+                        node.persistent = reply.persistent;
+                        node.checks.then_some(reply.checks)
+                    }
+                    Err(error) => {
                         log(&format!("{}: {error}", node.url));
                         None
-                    })
+                    }
                 })
             })
             .collect();
@@ -189,15 +190,47 @@ fn send(http: &ureq::Agent, nodes: &[Target], body: &[u8]) -> Option<Vec<Check>>
     })
 }
 
-fn node_checks(accept: bool, status: u16, body: &[u8]) -> Result<Option<Vec<Check>>, String> {
+fn deliver(http: &ureq::Agent, node: &mut Target, body: &[u8]) -> Result<IngestReply, String> {
+    if !node.persistent {
+        node.link.close();
+        return post(http, node, body);
+    }
+    let lost = node.link.connected() || node.link.failures() == 0;
+    match node.link.request(&node.url, &node.token, body.to_vec(), Duration::from_secs(10)) {
+        Ok(reply) => {
+            if !lost {
+                log(&format!("{}: persistent connection is back", node.url));
+            }
+            parse_reply(200, &reply)
+        }
+        Err(error) => {
+            if lost {
+                log(&format!("{}: persistent connection failed ({error}), retrying and sending reports by request meanwhile", node.url));
+            }
+            post(http, node, body)
+        }
+    }
+}
+
+fn post(http: &ureq::Agent, node: &Target, body: &[u8]) -> Result<IngestReply, String> {
+    let mut response = http
+        .post(&node.url)
+        .header("Content-Type", "application/json")
+        .header("Content-Encoding", "gzip")
+        .header("Authorization", format!("Bearer {}", node.token))
+        .send(body)
+        .map_err(|error| error.to_string())?;
+    let status = response.status().as_u16();
+    let body = response.body_mut().with_config().limit(1024 * 1024).read_to_vec().unwrap_or_default();
+    parse_reply(status, &body)
+}
+
+fn parse_reply(status: u16, body: &[u8]) -> Result<IngestReply, String> {
     if status != 200 {
         let text = String::from_utf8_lossy(&body[..body.len().min(200)]).trim().to_string();
         return Err(if text.is_empty() { format!("status {status}") } else { format!("status {status}, {text}") });
     }
-    if !accept {
-        return Ok(None);
-    }
-    serde_json::from_slice::<IngestReply>(body).map(|reply| Some(reply.checks)).map_err(|error| format!("unreadable reply, {error}"))
+    serde_json::from_slice::<IngestReply>(body).map_err(|error| format!("unreadable reply, {error}"))
 }
 
 pub fn log(message: &str) {
@@ -268,12 +301,12 @@ mod tests {
     }
 
     #[test]
-    fn node_checks_follow_the_checks_switch_and_surface_problems() {
-        let reply = br#"{"checks":[{"name":"Web","type":"ping","host":"a"}]}"#;
-        assert_eq!(node_checks(true, 200, reply).expect("ok").map(|c| c.len()), Some(1));
-        assert_eq!(node_checks(false, 200, reply).expect("ok"), None);
-        assert!(node_checks(true, 200, b"{\"checks\":[{\"name\":\"X\",\"type\":\"teleport\"}]}").is_err());
-        assert_eq!(node_checks(true, 422, b"unknown site").expect_err("fails"), "status 422, unknown site");
+    fn replies_carry_checks_and_the_connection_mode_and_surface_problems() {
+        let reply = parse_reply(200, br#"{"checks":[{"name":"Web","type":"ping","host":"a"}],"persistent":true}"#).expect("ok");
+        assert_eq!((reply.checks.len(), reply.persistent), (1, true));
+        assert!(!parse_reply(200, br#"{"checks":[]}"#).expect("older nodes").persistent);
+        assert!(parse_reply(200, b"{\"checks\":[{\"name\":\"X\",\"type\":\"teleport\"}]}").is_err());
+        assert_eq!(parse_reply(422, b"unknown site").expect_err("fails"), "status 422, unknown site");
     }
 
     #[test]

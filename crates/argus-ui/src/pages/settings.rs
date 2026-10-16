@@ -405,6 +405,11 @@ fn general(store: Store) -> impl IntoView {
         {row("Node name", "Agents name it as their site. Each node needs its own name.", text_input(store, "/name".into(), "internal", false))}
         {row("Listen address", "Takes effect after a restart.", text_input(store, "/listen".into(), "0.0.0.0:8090", false))}
         {row("Database", "Takes effect after a restart.", text_input(store, "/database".into(), "argus.db", false))}
+        {row(
+            "Connections",
+            "Persistent keeps a connection open from every agent to each node and between the nodes, so the nodes pass on every change at once. A lost connection is rebuilt on its own, meanwhile everything goes by request.",
+            select_input(store, "/shared/connection".into(), &[("interval", "Interval"), ("persistent", "Persistent")]),
+        )}
         {row("Config file", "", view! { <span class="mono value">{path}</span> })}
     }
 }

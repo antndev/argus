@@ -327,6 +327,7 @@ fn reconcile(app: &App, now: i64, conditions: Vec<Condition>, hosts: &HashSet<St
     let me = app.config().name.clone();
     let mut changes: Vec<(Alert, bool)> = Vec::new();
     let mut transitions: Vec<(Alert, bool)> = Vec::new();
+    let mut saved = false;
     {
         let db = app.db();
         let existing: HashMap<String, Alert> = db::alerts(&db).into_iter().map(|a| (a.key.clone(), a)).collect();
@@ -364,7 +365,7 @@ fn reconcile(app: &App, now: i64, conditions: Vec<Condition>, hosts: &HashSet<St
             if previous != Some(&alert) {
                 alert.owner = me.clone();
                 alert.updated = now;
-                let _ = db::save_alert(&db, &alert);
+                saved |= db::save_alert(&db, &alert).is_ok();
             }
         }
         for alert in existing.values() {
@@ -378,7 +379,7 @@ fn reconcile(app: &App, now: i64, conditions: Vec<Condition>, hosts: &HashSet<St
                 cleared.resolved_at = Some(now);
                 cleared.owner = me.clone();
                 cleared.updated = now;
-                let _ = db::save_alert(&db, &cleared);
+                saved |= db::save_alert(&db, &cleared).is_ok();
                 continue;
             }
             let mut resolved = alert.clone();
@@ -391,8 +392,11 @@ fn reconcile(app: &App, now: i64, conditions: Vec<Condition>, hosts: &HashSet<St
                 changes.push((resolved.clone(), false));
             }
             transitions.push((resolved.clone(), false));
-            let _ = db::save_alert(&db, &resolved);
+            saved |= db::save_alert(&db, &resolved).is_ok();
         }
+    }
+    if saved {
+        app.changed();
     }
     changes.sort_by_key(|(alert, _)| rank(alert));
     let note = notify::send_changes(app, &changes, now);

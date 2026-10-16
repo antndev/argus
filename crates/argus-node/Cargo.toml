@@ -9,10 +9,11 @@ authors.workspace = true
 publish = false
 
 [dependencies]
+argus-link = { path = "../argus-link" }
 argus-model = { path = "../argus-model" }
 aes-gcm = "0.10"
 argon2 = "0.5"
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
 base64 = "0.22"
 flate2 = "1"
 getrandom = "0.3"

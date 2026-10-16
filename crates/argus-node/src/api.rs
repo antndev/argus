@@ -6,14 +6,15 @@ use argus_model::{
     SeriesData, ServiceStatus, Severity,
 };
 use axum::Json;
+use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade, close_code};
 use axum::extract::{Query, Request, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use flate2::read::GzDecoder;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::config::Config;
+use crate::config::{Config, Connection};
 
 use crate::rules::{self, STALE};
 use crate::sync::bearer;
@@ -23,40 +24,26 @@ use crate::{App, db, zerobyte};
 const MAX_REPORT: u64 = 16 * 1024 * 1024;
 const MAX_UPLOAD: usize = 4 * 1024 * 1024;
 
-pub async fn ingest(State(app): State<Arc<App>>, request: Request) -> Response {
-    let headers = request.headers();
-    let Some(token) = bearer(headers) else {
-        return StatusCode::UNAUTHORIZED.into_response();
-    };
+fn agent(app: &App, token: &str) -> Option<String> {
     let hash = sha256_hex(token.as_bytes());
-    let config = app.config();
-    let Some(host) = config.shared.agents.iter().find(|(_, expected)| **expected == hash).map(|(id, _)| id.clone()) else {
-        return StatusCode::UNAUTHORIZED.into_response();
-    };
-    let gzip = headers.get(header::CONTENT_ENCODING).and_then(|v| v.to_str().ok()).is_some_and(|v| v.eq_ignore_ascii_case("gzip"));
-    let Ok(body) = axum::body::to_bytes(request.into_body(), MAX_UPLOAD).await else {
-        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
-    };
+    app.config().shared.agents.iter().find(|(_, expected)| **expected == hash).map(|(id, _)| id.clone())
+}
+
+fn unzip(body: &[u8]) -> Option<Vec<u8>> {
     let mut raw = Vec::new();
-    if gzip {
-        if GzDecoder::new(&body[..]).take(MAX_REPORT).read_to_end(&mut raw).is_err() {
-            return StatusCode::BAD_REQUEST.into_response();
-        }
-    } else {
-        raw.extend_from_slice(&body);
-    }
-    let Ok(report) = serde_json::from_slice::<Report>(&raw) else {
-        return StatusCode::BAD_REQUEST.into_response();
-    };
+    GzDecoder::new(body).take(MAX_REPORT).read_to_end(&mut raw).ok().map(|_| raw)
+}
+
+fn accept(app: &App, token: &str, raw: &[u8]) -> Result<IngestReply, (StatusCode, String)> {
+    let host = agent(app, token).ok_or((StatusCode::UNAUTHORIZED, String::new()))?;
+    let config = app.config();
+    let report = serde_json::from_slice::<Report>(raw).map_err(|_| (StatusCode::BAD_REQUEST, String::new()))?;
     if report.host.id != host {
-        return StatusCode::FORBIDDEN.into_response();
+        return Err((StatusCode::FORBIDDEN, String::new()));
     }
     if config.peer.as_ref().is_some_and(|peer| report.host.site != config.name && report.host.site != peer.name) {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            format!("unknown site {:?}, use {:?} or {:?}", report.host.site, config.name, config.peer_name().unwrap_or_default()),
-        )
-            .into_response();
+        let text = format!("unknown site {:?}, use {:?} or {:?}", report.host.site, config.name, config.peer_name().unwrap_or_default());
+        return Err((StatusCode::UNPROCESSABLE_ENTITY, text));
     }
     app.store_report(report, now_ms());
     let now = now_ms();
@@ -66,10 +53,58 @@ pub async fn ingest(State(app): State<Arc<App>>, request: Request) -> Response {
             .shared
             .services
             .iter()
-            .filter(|service| crate::service_runner(&app, service, now).as_deref() == Some(host.as_str()))
+            .filter(|service| crate::service_runner(app, service, now).as_deref() == Some(host.as_str()))
             .map(|service| Check { name: format!("{SERVICE_PREFIX}{}", service.check.name), ..service.check.clone() }),
     );
-    Json(IngestReply { checks }).into_response()
+    Ok(IngestReply { checks, persistent: config.shared.connection == Connection::Persistent })
+}
+
+pub async fn ingest(State(app): State<Arc<App>>, request: Request) -> Response {
+    let headers = request.headers();
+    let Some(token) = bearer(headers).map(str::to_string).filter(|token| agent(&app, token).is_some()) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let gzip = headers.get(header::CONTENT_ENCODING).and_then(|v| v.to_str().ok()).is_some_and(|v| v.eq_ignore_ascii_case("gzip"));
+    let Ok(body) = axum::body::to_bytes(request.into_body(), MAX_UPLOAD).await else {
+        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+    };
+    let raw = if gzip {
+        let Some(raw) = unzip(&body) else { return StatusCode::BAD_REQUEST.into_response() };
+        raw
+    } else {
+        body.to_vec()
+    };
+    match accept(&app, &token, &raw) {
+        Ok(reply) => Json(reply).into_response(),
+        Err(failure) => failure.into_response(),
+    }
+}
+
+pub async fn ingest_stream(State(app): State<Arc<App>>, headers: HeaderMap, upgrade: WebSocketUpgrade) -> Response {
+    let Some(token) = bearer(&headers).map(str::to_string).filter(|token| agent(&app, token).is_some()) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    upgrade.max_message_size(MAX_UPLOAD).on_upgrade(move |socket| stream_reports(app, token, socket))
+}
+
+async fn stream_reports(app: Arc<App>, token: String, mut socket: WebSocket) {
+    while let Some(Ok(message)) = socket.recv().await {
+        let Message::Binary(body) = message else { continue };
+        let reply = unzip(&body).ok_or((StatusCode::BAD_REQUEST, String::new())).and_then(|raw| accept(&app, &token, &raw));
+        let sent = match reply {
+            Ok(reply) => socket.send(Message::Binary(serde_json::to_vec(&reply).unwrap_or_default().into())).await,
+            Err((status, text)) => {
+                let mut reason = if text.is_empty() { format!("status {}", status.as_u16()) } else { format!("status {}, {text}", status.as_u16()) };
+                let cut = reason.char_indices().map(|(at, c)| at + c.len_utf8()).take_while(|end| *end <= 120).last().unwrap_or(0);
+                reason.truncate(cut);
+                let _ = socket.send(Message::Close(Some(CloseFrame { code: close_code::POLICY, reason: reason.into() }))).await;
+                break;
+            }
+        };
+        if sent.is_err() {
+            break;
+        }
+    }
 }
 
 fn host_state(alerts: &[Alert], host: &str) -> Severity {

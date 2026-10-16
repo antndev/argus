@@ -74,6 +74,22 @@ pub struct Shared {
     pub backup_max_age: Span,
     #[serde(default)]
     pub retention: Retention,
+    #[serde(default, skip_serializing_if = "Connection::is_interval")]
+    pub connection: Connection,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Connection {
+    #[default]
+    Interval,
+    Persistent,
+}
+
+impl Connection {
+    fn is_interval(&self) -> bool {
+        *self == Connection::Interval
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -96,6 +112,7 @@ impl Default for Shared {
             order: Vec::new(),
             backup_max_age: backup_age(),
             retention: Retention::default(),
+            connection: Connection::Interval,
         }
     }
 }

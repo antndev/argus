@@ -9,6 +9,7 @@ authors.workspace = true
 publish = false
 
 [dependencies]
+argus-link = { path = "../argus-link" }
 argus-model = { path = "../argus-model" }
 flate2 = "1"
 libc = "0.2"

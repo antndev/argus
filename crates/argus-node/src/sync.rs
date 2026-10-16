@@ -1,15 +1,19 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 
+use argus_link::Link;
 use argus_model::{Alert, AlertState, BackupSchedule, Message, SyncPayload};
 use axum::Json;
+use axum::extract::ws::{self, WebSocket, WebSocketUpgrade};
 use axum::extract::{Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use tokio::sync::watch;
 
-use crate::config::Shared;
+use crate::config::{Connection, Peer, Shared};
 use crate::db::Marks;
 use crate::notify::HTTP;
 use crate::util::{DAY, now_ms, sha256_hex};
@@ -19,6 +23,7 @@ const SAMPLE_LIMIT: usize = 50_000;
 const MAX_PAYLOAD: usize = 64 * 1024 * 1024;
 const INTERVAL: Duration = Duration::from_secs(15);
 const OFFSET_MS: i64 = 5_000;
+const SETTLE: Duration = Duration::from_millis(500);
 
 fn until_tick(now: i64) -> Duration {
     let step = INTERVAL.as_millis() as i64;
@@ -151,11 +156,61 @@ pub async fn serve(State(app): State<Arc<App>>, request: Request) -> Response {
     let Ok(payload) = serde_json::from_slice::<SyncPayload>(&body) else {
         return StatusCode::BAD_REQUEST.into_response();
     };
+    Json(answer(&app, payload)).into_response()
+}
+
+fn answer(app: &App, payload: SyncPayload) -> SyncPayload {
     let now = now_ms();
     let cursor = payload.cursor;
-    merge(&app, payload, false);
+    merge(app, payload, false);
     app.peer_state().last_sync = Some(now);
-    Json(build(&app, now, cursor, true)).into_response()
+    build(app, now, cursor, true)
+}
+
+fn trusted(app: &App, token: &str) -> bool {
+    app.config().peer.as_ref().is_some_and(|peer| same_secret(token, &peer.token))
+}
+
+pub async fn serve_stream(State(app): State<Arc<App>>, headers: HeaderMap, upgrade: WebSocketUpgrade) -> Response {
+    if app.config().peer.is_none() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(token) = bearer(&headers).map(str::to_string).filter(|token| trusted(&app, token)) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    upgrade.max_message_size(MAX_PAYLOAD).on_upgrade(move |socket| stream(app, token, socket))
+}
+
+async fn stream(app: Arc<App>, token: String, mut socket: WebSocket) {
+    let mut changes = app.changes.subscribe();
+    loop {
+        tokio::select! {
+            message = socket.recv() => {
+                let Some(Ok(message)) = message else { break };
+                let ws::Message::Binary(body) = message else { continue };
+                if !trusted(&app, &token) {
+                    break;
+                }
+                let Ok(payload) = serde_json::from_slice::<SyncPayload>(&body) else { break };
+                changes.borrow_and_update();
+                let worker = app.clone();
+                let Ok(Ok(reply)) = tokio::task::spawn_blocking(move || serde_json::to_vec(&answer(&worker, payload))).await else { break };
+                if socket.send(ws::Message::Binary(reply.into())).await.is_err() {
+                    break;
+                }
+            }
+            changed = changes.changed() => {
+                if changed.is_err() {
+                    break;
+                }
+                tokio::time::sleep(SETTLE).await;
+                changes.borrow_and_update();
+                if socket.send(ws::Message::Text("changed".into())).await.is_err() {
+                    break;
+                }
+            }
+        }
+    }
 }
 
 fn exchange(url: &str, token: &str, payload: &SyncPayload) -> Result<SyncPayload, String> {
@@ -170,18 +225,69 @@ fn exchange(url: &str, token: &str, payload: &SyncPayload) -> Result<SyncPayload
         .map_err(|e| e.to_string())
 }
 
+fn stream_exchange(link: &mut Link, url: &str, peer: &Peer, payload: &SyncPayload) -> Result<SyncPayload, String> {
+    let lost = link.connected() || link.failures() == 0;
+    let body = serde_json::to_vec(payload).map_err(|e| e.to_string())?;
+    match link.request(&format!("{}/api/v1/sync", url.trim_end_matches('/')), &peer.token, body, Duration::from_secs(60)) {
+        Ok(reply) => {
+            if !lost {
+                log(&format!("persistent connection to the {} node is back", peer.name));
+            }
+            serde_json::from_slice(&reply).map_err(|e| e.to_string())
+        }
+        Err(error) => {
+            if lost {
+                log(&format!("persistent connection to the {} node failed ({error}), retrying and syncing by request meanwhile", peer.name));
+            }
+            exchange(url, &peer.token, payload)
+        }
+    }
+}
+
+fn settle(link: &mut Link, peer: &Peer, changes: &mut watch::Receiver<u64>, wake: &Receiver<()>) {
+    let heartbeat = Instant::now() + until_tick(now_ms());
+    while Instant::now() < heartbeat {
+        if wake.try_iter().count() > 0 {
+            return;
+        }
+        if changes.has_changed().unwrap_or(false) {
+            thread::sleep(SETTLE);
+            return;
+        }
+        match link.wait(Duration::from_millis(250)) {
+            Ok(true) => return,
+            Ok(false) => {}
+            Err(error) => {
+                log(&format!("persistent connection to the {} node lost ({error}), retrying and syncing by request meanwhile", peer.name));
+                return;
+            }
+        }
+    }
+}
+
 pub fn run(app: &App, wake: &Receiver<()>) {
     let mut failing = false;
+    let mut link = Link::default();
+    let mut changes = app.changes.subscribe();
     loop {
         let Some((peer, url)) = app.config().peer.clone().and_then(|p| p.url.clone().map(|url| (p, url))) else {
+            link.close();
             let _ = wake.recv_timeout(INTERVAL);
             continue;
         };
+        let persistent = app.config().shared.connection == Connection::Persistent;
+        changes.borrow_and_update();
         let now = now_ms();
         let cursor = app.peer_state().cursor;
         let mut payload = build(app, now, cursor, false);
         payload.cursor = cursor;
-        match exchange(&url, &peer.token, &payload) {
+        let result = if persistent {
+            stream_exchange(&mut link, &url, &peer, &payload)
+        } else {
+            link.close();
+            exchange(&url, &peer.token, &payload)
+        };
+        match result {
             Ok(response) => {
                 if failing {
                     log(&format!("sync with {} node restored", peer.name));
@@ -207,7 +313,11 @@ pub fn run(app: &App, wake: &Receiver<()>) {
                 }
             }
         }
-        let _ = wake.recv_timeout(until_tick(now_ms()));
+        if persistent && link.connected() {
+            settle(&mut link, &peer, &mut changes, wake);
+        } else {
+            let _ = wake.recv_timeout(until_tick(now_ms()));
+        }
     }
 }
 
@@ -228,6 +338,44 @@ mod tests {
         let mut config = Config { name: name.into(), ..Default::default() };
         config.peer = Some(Peer { name: "other".into(), url: None, token: "secret-secret-secret".into() });
         App::new(config, db::open(":memory:").expect("db"))
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn persistent_links_carry_reports_syncs_and_change_notes() {
+        use std::io::Write;
+        let mut config = Config { name: "vps".into(), ..Default::default() };
+        config.peer = Some(Peer { name: "home".into(), url: None, token: "secret-secret-secret".into() });
+        config.shared.agents.insert("h".into(), sha256_hex(b"agent-token-0123456789"));
+        config.shared.connection = Connection::Persistent;
+        let app = Arc::new(App::new(config, db::open(":memory:").expect("db")));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let base = format!("http://{}", listener.local_addr().expect("address"));
+        tokio::spawn(axum::serve(listener, crate::router(app.clone())).into_future());
+        tokio::task::spawn_blocking(move || {
+            let report = Report { host: HostInfo { id: "h".into(), site: "vps".into(), ..Default::default() }, ..Default::default() };
+            let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+            encoder.write_all(&serde_json::to_vec(&report).expect("json")).expect("gzip");
+            let body = encoder.finish().expect("gzip");
+            let ingest = format!("{base}/api/v1/ingest");
+            let mut agent = Link::default();
+            let reply = agent.request(&ingest, "agent-token-0123456789", body.clone(), Duration::from_secs(5)).expect("reply");
+            assert!(serde_json::from_slice::<argus_model::IngestReply>(&reply).expect("reply").persistent);
+            assert!(app.snapshots().iter().any(|s| s.report.host.id == "h"));
+            let mut peer = Link::default();
+            let payload = serde_json::to_vec(&SyncPayload::default()).expect("json");
+            let reply = peer.request(&format!("{base}/api/v1/sync"), "secret-secret-secret", payload, Duration::from_secs(5)).expect("sync");
+            assert!(serde_json::from_slice::<SyncPayload>(&reply).expect("payload").hosts.iter().any(|s| s.report.host.id == "h"));
+            agent.request(&ingest, "agent-token-0123456789", body, Duration::from_secs(5)).expect("second report");
+            assert_eq!(peer.wait(Duration::from_secs(5)), Ok(true));
+            assert!(Link::default().request(&ingest, "wrong-token-0123456789", Vec::new(), Duration::from_secs(5)).is_err());
+            let unknown = Report { host: HostInfo { id: "h".into(), site: "elsewhere".into(), ..Default::default() }, ..Default::default() };
+            let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+            encoder.write_all(&serde_json::to_vec(&unknown).expect("json")).expect("gzip");
+            let refused = agent.request(&ingest, "agent-token-0123456789", encoder.finish().expect("gzip"), Duration::from_secs(5));
+            assert!(refused.expect_err("unknown site").starts_with("status 422"));
+        })
+        .await
+        .expect("client");
     }
 
     #[test]

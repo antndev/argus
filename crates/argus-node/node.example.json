@@ -118,6 +118,7 @@
       "medium": "90d",
       "long": "730d",
       "daily": "3650d"
-    }
+    },
+    "connection": "persistent"
   }
 }
