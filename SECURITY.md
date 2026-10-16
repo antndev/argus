@@ -50,7 +50,7 @@ changes anything on them.
 - Ingest and sync check their token before the body is read, so anonymous requests cannot make a node buffer large
   payloads. Other routes accept at most 1 MiB.
 - The ZeroByte webhook is authenticated by a secret in its URL. A ZeroByte API key has the full rights of its ZeroByte
-  user, so keep it in the node config with mode 600 and only set it if the mirror check is wanted.
+  user, so keep it in the node config with mode 600 and the node's dashboard private.
 
 ### Dashboard
 

@@ -849,15 +849,15 @@ fn backups(store: Store) -> impl IntoView {
         token => format!("{}/api/v1/hooks/zerobyte/{token}", origin()),
     };
     view! {
-        <p class="lead">"ZeroByte tells Argus about every backup run. Add a Generic Webhook destination in ZeroByte with the address below, then every start, success, warning and failure arrives here within seconds. S3 mirrors only report failures that way, so Argus can also ask the ZeroByte API every few minutes for the last run of each schedule and mirror. Argus only reads, it never starts or changes a backup."</p>
+        <p class="lead">"Argus reads every backup schedule and its mirrors from the ZeroByte API and alerts when a run fails or is overdue. Schedules deleted in ZeroByte disappear here on their own. A ZeroByte webhook adds instant updates and backup sizes. Argus only reads, it never starts or changes a backup."</p>
         {row("ZeroByte integration", "Show backups and alert on problems.", switch(store, "/zerobyte", || json!({ "interval": "5m" })))}
         <Show when=enabled>
-            {group("Webhook")}
-            {row("Webhook token", view! { <span class="mono">{hook}</span> }, token_input(store, "/zerobyte/webhook_token".into(), true))}
-            {group("API, optional")}
-            {row("API address", "Needed for the mirror status.", text_input(store, "/zerobyte/url".into(), "http://zerobyte.example.com:4096", true))}
+            {group("API")}
+            {row("API address", "Where this node reaches ZeroByte.", text_input(store, "/zerobyte/url".into(), "http://zerobyte.example.com:4096", true))}
             {row("API key", "ZeroByte keys can also delete backups, keep this node private.", password_input(store, "/zerobyte/api_key".into()))}
             {row("Ask every", "", span_input(store, "/zerobyte/interval".into(), false))}
+            {group("Webhook, optional")}
+            {row("Webhook token", view! { <span class="mono">{hook}</span> }, token_input(store, "/zerobyte/webhook_token".into(), true))}
         </Show>
         {row("Alert after", "Alert when a backup or mirror fails or no success arrived for this long.", span_input(store, "/shared/backup_max_age".into(), false))}
     }

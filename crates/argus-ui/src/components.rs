@@ -390,19 +390,6 @@ fn backup_row(store: Store, backup: BackupSchedule, columns: (bool, bool)) -> im
     let last = backup.last_success;
     let message = backup.message.clone();
     let added = (!backup.added.is_empty()).then(|| format!("{} added", backup.added));
-    let name = backup.name.clone();
-    let remove = move |_| {
-        if !window().confirm_with_message(&format!("Remove the backup schedule {name}? It comes back with its next run.")).unwrap_or(false) {
-            return;
-        }
-        let name = name.clone();
-        spawn_local(async move {
-            match api::send("/api/v1/backups/remove", &serde_json::json!({ "name": name })).await {
-                Ok(()) => store.refresh(),
-                Err(failure) => store.notify(format!("Not removed, {failure}")),
-            }
-        });
-    };
     view! {
         <tr>
             <td><Pill severity=severity text=text/></td>
@@ -411,11 +398,6 @@ fn backup_row(store: Store, backup: BackupSchedule, columns: (bool, bool)) -> im
             <td class="hide-sm">{backup.size.clone()}{added.map(|text| view! { <span class="sub">{text}</span> })}</td>
             {columns.0.then(|| view! { <td>{repository(&backup)}</td> })}
             {columns.1.then(|| view! { <td>{mirrors(store, &backup)}</td> })}
-            <td class="num">
-                <button class="btn small icon danger" type="button" aria-label="Remove schedule" title="Remove schedule" on:click=remove>
-                    <span class="ico" inner_html=icons::TRASH></span>
-                </button>
-            </td>
         </tr>
     }
 }
@@ -432,7 +414,7 @@ pub fn BackupTable() -> impl IntoView {
     view! {
         <Show
             when=move || !empty()
-            fallback=|| view! { <p class="meta">"No backup data yet. Point ZeroByte's webhook at this node or set its API key."</p> }
+            fallback=|| view! { <p class="meta">"No backup data yet. Set the ZeroByte API address and key under Settings, ZeroByte integration."</p> }
         >
             <div class="tbl-wrap sheet stack">
                 <table>
@@ -444,7 +426,6 @@ pub fn BackupTable() -> impl IntoView {
                             <th class="hide-sm">"Size"</th>
                             {move || columns.get().0.then(|| view! { <th>"Repository"</th> })}
                             {move || columns.get().1.then(|| view! { <th>"Mirror"</th> })}
-                            <th></th>
                         </tr>
                     </thead>
                     <tbody>{move || backups.get().into_iter().map(|b| backup_row(store, b, columns.get())).collect_view()}</tbody>

@@ -372,7 +372,6 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/v1/notify-test", post(notify::test))
         .route("/api/v1/push/devices", post(notify::subscribe))
         .route("/api/v1/order", post(api::order))
-        .route("/api/v1/backups/remove", post(zerobyte::removal))
         .route("/api/v1/password", post(session::change))
         .route_layer(axum::middleware::from_fn_with_state(app.clone(), session::require));
     let dashboard = Router::new()

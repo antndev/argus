@@ -3,11 +3,9 @@ use std::thread;
 use std::time::Duration;
 
 use argus_model::{BackupMirror, BackupSchedule, BackupState};
-use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use serde::Deserialize;
 use serde_json::Value;
 
 use crate::notify::HTTP;
@@ -133,18 +131,8 @@ pub fn apply(schedule: &mut BackupSchedule, kind: Kind, at: i64, detail: &str) {
     }
 }
 
-pub fn remove(app: &App, name: &str) {
+fn remove(app: &App, name: &str) {
     update(app, name, |schedule| *schedule = BackupSchedule { name: schedule.name.clone(), removed: true, ..Default::default() });
-}
-
-#[derive(Deserialize)]
-pub struct Removal {
-    name: String,
-}
-
-pub async fn removal(State(app): State<Arc<App>>, Json(removal): Json<Removal>) -> StatusCode {
-    remove(&app, &removal.name);
-    StatusCode::NO_CONTENT
 }
 
 fn update(app: &App, name: &str, change: impl FnOnce(&mut BackupSchedule)) {

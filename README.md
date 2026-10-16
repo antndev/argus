@@ -13,8 +13,8 @@ second node outside your network can watch the first one and take over when it i
 - Node with SQLite storage, alert rules, the dashboard and web push. Two nodes sync every 15 seconds.
 - Dashboard in Leptos with uPlot charts, built into the node binary. Added to the home screen of a phone it is also
   the app that receives the notifications. No app store app and no relay service.
-- [ZeroByte](https://github.com/nicotsx/zerobyte) integration. Argus takes every backup event from ZeroByte's
-  webhooks, reads the S3 mirror status from the ZeroByte API and alerts when a backup or mirror fails or is overdue.
+- [ZeroByte](https://github.com/nicotsx/zerobyte) integration. Argus reads every backup schedule and its mirrors from
+  the ZeroByte API, takes instant events from its webhook and alerts when a backup or mirror fails or is overdue.
 
 ## How it fits together
 
@@ -67,7 +67,7 @@ dashboard should not be reachable from the internet, use two names instead (`arg
 
 - `name`: this node's name, which is also the `site` of the hosts it owns.
 - `peer`: the other node. The node that sets `url` starts the sync, both use the same `token`.
-- `zerobyte`: webhook token and optional API access for backup monitoring.
+- `zerobyte`: API access and an optional webhook token for backup monitoring.
 - `shared`: settings both nodes keep identical. The node with the newer `revision` wins, on equal revisions the node
   that starts the sync wins.
   - `agents`: host id to that host's token or its sha256.
@@ -215,11 +215,12 @@ subscription is removed automatically and logged.
 Configured under Settings, ZeroByte integration or in the `zerobyte` block. Argus only reads, it never starts or
 changes a backup.
 
-- Webhook. In ZeroByte add a notification destination of type Generic Webhook with method POST, JSON enabled and the
-  keys `title` and `message`, URL `https://<node>/api/v1/hooks/zerobyte/<webhook_token>`. Enable start, success,
-  warning and failure on every backup schedule and add the node's origin to ZeroByte's `WEBHOOK_ALLOWED_ORIGINS`.
-- API, optional. ZeroByte reports S3 mirror syncs only when they fail. With `url` and `api_key` set the node also asks
-  the API for the last run of every schedule and its mirrors.
+- API. Set `url` and `api_key`. Every `interval` (default 5 minutes) the node asks the API for every schedule, its last
+  run and its mirrors. Schedules deleted in ZeroByte disappear from Argus with the next request.
+- Webhook, optional. For instant updates and backup sizes add a notification destination of type Generic Webhook in
+  ZeroByte with method POST, JSON enabled and the keys `title` and `message`, URL
+  `https://<node>/api/v1/hooks/zerobyte/<webhook_token>`. Enable start, success, warning and failure on every backup
+  schedule and add the node's origin to ZeroByte's `WEBHOOK_ALLOWED_ORIGINS`.
 - Argus alerts when a backup or mirror fails or when no success arrived within `shared.backup_max_age` (default 25 h).
 
 ## Images
