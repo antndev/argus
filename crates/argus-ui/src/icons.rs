@@ -26,6 +26,11 @@ line_icon!(
     HOSTS,
     r#"<rect x="2.5" y="2.5" width="11" height="4.5" rx="1"/><rect x="2.5" y="9" width="11" height="4.5" rx="1"/><path d="M5 4.75h.01M5 11.25h.01"/>"#
 );
+line_icon!(EYE, r#"<path d="M1.75 8s2.25-4.25 6.25-4.25S14.25 8 14.25 8s-2.25 4.25-6.25 4.25S1.75 8 1.75 8z"/><circle cx="8" cy="8" r="1.9"/>"#);
+line_icon!(
+    EYE_OFF,
+    r#"<path d="M1.75 8s2.25-4.25 6.25-4.25S14.25 8 14.25 8s-2.25 4.25-6.25 4.25S1.75 8 1.75 8z"/><circle cx="8" cy="8" r="1.9"/><path d="M2.75 2.75l10.5 10.5"/>"#
+);
 line_icon!(CHECKS, r#"<path d="M1.5 8.5h2.75l1.75-4 3 7.5 1.75-3.5h3.75"/>"#);
 line_icon!(ALERTS, r#"<path d="M4 11V7.25a4 4 0 0 1 8 0V11l1.25 1.5h-10.5zM6.75 14h2.5"/>"#);
 line_icon!(

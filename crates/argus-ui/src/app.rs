@@ -63,17 +63,30 @@ fn Login() -> impl IntoView {
     let password = RwSignal::new(String::new());
     let repeat = RwSignal::new(String::new());
     let error = RwSignal::new(String::new());
+    let shake = RwSignal::new(0u32);
     let busy = RwSignal::new(false);
-    let setup = move || store.gate.get() == "setup";
+    let reveal = RwSignal::new(false);
+    let fail = move |text: String| {
+        let _ = error.try_set(text);
+        let _ = shake.try_update(|n| *n += 1);
+    };
     let submit = move |event: SubmitEvent| {
         event.prevent_default();
+        if busy.get_untracked() {
+            return;
+        }
+        let setup = store.gate.get_untracked() == "setup";
         let secret = password.get_untracked();
-        if setup() && secret != repeat.get_untracked() {
-            error.set("The passwords do not match".to_string());
+        if setup && secret.chars().count() < 10 {
+            fail("Use at least 10 characters".to_string());
+            return;
+        }
+        if setup && secret != repeat.get_untracked() {
+            fail("The passwords do not match".to_string());
             return;
         }
         busy.set(true);
-        let path = if setup() { "/api/v1/setup" } else { "/api/v1/login" };
+        let path = if setup { "/api/v1/setup" } else { "/api/v1/login" };
         spawn_local(async move {
             match api::send(path, &serde_json::json!({ "password": secret })).await {
                 Ok(()) => {
@@ -83,68 +96,83 @@ fn Login() -> impl IntoView {
                     store.refresh();
                 }
                 Err(failure) => {
-                    let _ = error.try_set(if failure.status == 401 { "Wrong password".to_string() } else { format::capitalize(&failure.text) });
+                    fail(if failure.status == 401 { "Wrong password".to_string() } else { format::capitalize(&failure.text) });
                     store.check_session();
                 }
             }
             let _ = busy.try_set(false);
         });
     };
-    let field = move |label: &'static str, value: RwSignal<String>, autocomplete: &'static str| {
+    let field = move |value: RwSignal<String>, placeholder: &'static str, autocomplete: &'static str, eye: bool| {
         view! {
-            <label class="field">
-                <span>{label}</span>
+            <div class="login-field" class:bad=move || !error.get().is_empty()>
                 <input
-                    class="input"
-                    type="password"
+                    type=move || if reveal.get() { "text" } else { "password" }
                     autocomplete=autocomplete
-                    required
+                    placeholder=placeholder
+                    aria-label=placeholder
+                    autofocus=eye
+                    spellcheck="false"
                     prop:value=move || value.get()
                     on:input=move |ev| {
                         value.set(event_target_value(&ev));
                         error.set(String::new());
                     }
                 />
-            </label>
+                {eye.then(|| view! {
+                    <button
+                        class="login-eye"
+                        type="button"
+                        aria-label=move || if reveal.get() { "Hide password" } else { "Show password" }
+                        on:click=move |_| reveal.update(|shown| *shown = !*shown)
+                        inner_html=move || if reveal.get() { icons::EYE_OFF } else { icons::EYE }
+                    ></button>
+                })}
+            </div>
         }
     };
+    let fields = move || match shake.get() {
+        0 => "login-fields",
+        n if n % 2 == 1 => "login-fields shake-a",
+        _ => "login-fields shake-b",
+    };
+    let note = move |hint: &'static str| {
+        view! {
+            <p class="login-note" class:error=move || !error.get().is_empty() role="alert">
+                {move || Some(error.get()).filter(|text| !text.is_empty()).unwrap_or_else(|| hint.to_string())}
+            </p>
+        }
+    };
+    let ready = move || !password.get().is_empty() && (store.gate.get() != "setup" || !repeat.get().is_empty());
     let form = move || {
         match store.gate.get().as_str() {
         "pending" => view! {
-            <div>
-                <h1>"Waiting for the internal node"</h1>
-                <p>"This node takes its password from the internal node with the next sync. Set the password there, then check again."</p>
-            </div>
+            <h1>"Waiting for the internal node"</h1>
+            <p>"This node takes its password from the internal node with the next sync."</p>
             <button class="btn primary" type="button" on:click=move |_| store.check_session()>"Check again"</button>
         }
         .into_any(),
         "expired" => view! {
-            <div>
-                <h1>"Setup time is over"</h1>
-                <p>"A new password can only be set within 15 minutes after the node starts. Restart the node, or run argus-node reset-password on the server, then reload this page."</p>
-            </div>
+            <h1>"Setup time is over"</h1>
+            <p>"Restart the node or run argus-node reset-password on the server, then check again."</p>
             <button class="btn primary" type="button" on:click=move |_| store.check_session()>"Check again"</button>
         }
         .into_any(),
         "setup" => view! {
-            <div>
-                <h1>"Set up Argus"</h1>
-                <p>"Choose the password for this dashboard. It needs at least 10 characters."</p>
+            <h1>"Set up Argus"</h1>
+            <div class=fields>
+                {field(password, "Password", "new-password", true)}
+                {field(repeat, "Repeat password", "new-password", false)}
             </div>
-            {field("New password", password, "new-password")}
-            {field("Repeat password", repeat, "new-password")}
-            <p class="login-error" role="alert">{move || error.get()}</p>
-            <button class="btn primary" type="submit" disabled=move || busy.get()>{move || if busy.get() { "Saving" } else { "Create password" }}</button>
+            <button class="btn primary" type="submit" disabled=move || !ready() || busy.get()>{move || if busy.get() { "Saving" } else { "Create password" }}</button>
+            {note("At least 10 characters")}
         }
         .into_any(),
         _ => view! {
-            <div>
-                <h1>"Sign in"</h1>
-                <p>"Enter the dashboard password to continue."</p>
-            </div>
-            {field("Password", password, "current-password")}
-            <p class="login-error" role="alert">{move || error.get()}</p>
-            <button class="btn primary" type="submit" disabled=move || busy.get()>{move || if busy.get() { "Signing in" } else { "Sign in" }}</button>
+            <h1>"Welcome back"</h1>
+            <div class=fields>{field(password, "Password", "current-password", true)}</div>
+            <button class="btn primary" type="submit" disabled=move || !ready() || busy.get()>{move || if busy.get() { "Signing in" } else { "Sign in" }}</button>
+            {note("")}
         }
         .into_any(),
     }
