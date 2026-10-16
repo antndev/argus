@@ -67,7 +67,7 @@ dashboard should not be reachable from the internet, use two names instead (`arg
 
 - `name`: this node's name, which is also the `site` of the hosts it owns.
 - `peer`: the other node. The node that sets `url` starts the sync, both use the same `token`.
-- `zerobyte`: API access and an optional webhook token for backup monitoring.
+- `zerobyte`: API access and the webhook token for backup monitoring.
 - `shared`: settings both nodes keep identical. The node with the newer `revision` wins, on equal revisions the node
   that starts the sync wins.
   - `agents`: host id to that host's token or its sha256.
@@ -212,15 +212,16 @@ subscription is removed automatically and logged.
 
 ## ZeroByte integration
 
-Configured under Settings, ZeroByte integration or in the `zerobyte` block. Argus only reads, it never starts or
-changes a backup.
+Configured under Settings, ZeroByte integration or in the `zerobyte` block. Argus only reads and receives, it never
+starts or changes a backup.
 
 - API. Set `url` and `api_key`. Every `interval` (default 5 minutes) the node asks the API for every schedule, its last
   run and its mirrors. Schedules deleted in ZeroByte disappear from Argus with the next request.
-- Webhook, optional. For instant updates and backup sizes add a notification destination of type Generic Webhook in
-  ZeroByte with method POST, JSON enabled and the keys `title` and `message`, URL
+- Webhook. Every backup run arrives within seconds, with its size. Add a notification destination of type Generic
+  Webhook in ZeroByte with method POST, JSON enabled and the keys `title` and `message`, URL
   `https://<node>/api/v1/hooks/zerobyte/<webhook_token>`. Enable start, success, warning and failure on every backup
-  schedule and add the node's origin to ZeroByte's `WEBHOOK_ALLOWED_ORIGINS`.
+  schedule and add the node's origin to ZeroByte's `WEBHOOK_ALLOWED_ORIGINS`. The token in the URL authenticates
+  ZeroByte, the dashboard creates one when the integration is turned on.
 - Argus alerts when a backup or mirror fails or when no success arrived within `shared.backup_max_age` (default 25 h).
 
 ## Images

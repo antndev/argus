@@ -326,9 +326,13 @@ fn password_input(store: Store, path: String) -> impl IntoView {
     }
 }
 
-fn token_input(store: Store, path: String, optional: bool) -> impl IntoView {
-    let (shown, hint, generate, copied) = (path.clone(), path.clone(), path.clone(), path.clone());
-    let fresh = move || read(store, &copied).and_then(|v| v.as_str().map(str::to_string)).filter(|v| v != HIDDEN && !v.is_empty());
+fn token_input(store: Store, path: String, optional: bool, fresh: RwSignal<Option<String>>) -> impl IntoView {
+    let (shown, hint, generate) = (path.clone(), path.clone(), path.clone());
+    let value = Memo::new(move |_| match text(store, &shown) {
+        value if value == HIDDEN => fresh.get().unwrap_or_default(),
+        value => value,
+    });
+    let current = move || Some(value.get()).filter(|v| !v.is_empty());
     view! {
         <div class="ctl-stack">
             <input
@@ -336,9 +340,10 @@ fn token_input(store: Store, path: String, optional: bool) -> impl IntoView {
                 type="text"
                 spellcheck="false"
                 placeholder=move || if saved(store, &hint).is_some_and(|v| v == HIDDEN) { "Stored, generate or type to replace" } else { "Not set" }
-                prop:value=move || { let value = text(store, &shown); if value == HIDDEN { String::new() } else { value } }
+                prop:value=value
                 on:input=move |ev| {
                     let value = event_target_value(&ev);
+                    fresh.set(Some(value.clone()).filter(|v| !v.is_empty()));
                     let stored = saved(store, &path).is_some_and(|v| v == HIDDEN);
                     let next = match (value.is_empty(), stored, optional) {
                         (true, true, _) => Some(json!(HIDDEN)),
@@ -351,11 +356,14 @@ fn token_input(store: Store, path: String, optional: bool) -> impl IntoView {
             <div class="ctl-row">
                 <button class="btn small" type="button" on:click=move |_| {
                     let path = generate.clone();
-                    fetch_token(move |token| write(store, &path, Some(json!(token))));
+                    fetch_token(move |token| {
+                        write(store, &path, Some(json!(token.clone())));
+                        fresh.set(Some(token));
+                    });
                 }>
                     <span class="ico" inner_html=icons::REFRESH></span>"Generate"
                 </button>
-                {move || fresh().map(|token| view! {
+                {move || current().map(|token| view! {
                     <button class="btn small" type="button" on:click=move |_| copy(store, token.clone())>
                         <span class="ico" inner_html=icons::COPY></span>"Copy"
                     </button>
@@ -513,7 +521,7 @@ fn check_card(store: Store, base: String, runner: Option<Memo<Vec<String>>>) -> 
             _ => view! {
                 {field("URL", text_input(store, p("url"), "https://service.example.com/health", false))}
                 {field("Expected status", number_input(store, p("status"), "any 2xx", true))}
-                {field("Body contains", text_input(store, p("contains"), "optional", true))}
+                {field("Body contains", text_input(store, p("contains"), "(optional)", true))}
                 {field("Timeout", span_input(store, p("timeout"), true))}
                 {field("JSON field", json_path_input(store, p("json")))}
                 {field("Equals", value_input(store, p("json/0/equals"), "ok, true or 200"))}
@@ -611,7 +619,7 @@ fn json_path_input(store: Store, path: String) -> impl IntoView {
             class="input"
             type="text"
             spellcheck="false"
-            placeholder="status, optional"
+            placeholder="status (optional)"
             prop:value=move || text(store, &shown)
             on:input=move |ev| {
                 let value = event_target_value(&ev);
@@ -836,28 +844,38 @@ fn peer(store: Store) -> impl IntoView {
             <Show when=internal>
                 {row("Address", "Where this node reaches the external node.", text_input(store, "/peer/url".into(), "https://argus.external.example.com", false))}
             </Show>
-            {row("Sync token", "The same secret on both nodes, at least 16 characters.", token_input(store, "/peer/token".into(), false))}
+            {row("Sync token", "The same secret on both nodes, at least 16 characters.", token_input(store, "/peer/token".into(), false, RwSignal::new(None)))}
         </Show>
     }
 }
 
 fn backups(store: Store) -> impl IntoView {
     let enabled = move || read(store, "/zerobyte").is_some();
-    let hook = move || match text(store, "/zerobyte/webhook_token") {
-        token if token.is_empty() => "Generate a token to get the webhook address.".to_string(),
-        token if token == HIDDEN => format!("{}/api/v1/hooks/zerobyte/<stored token>", origin()),
-        token => format!("{}/api/v1/hooks/zerobyte/{token}", origin()),
+    let fresh = RwSignal::new(None::<String>);
+    Effect::new(move |_| {
+        if enabled() && read(store, "/zerobyte/webhook_token").is_none() {
+            fetch_token(move |token| {
+                write(store, "/zerobyte/webhook_token", Some(json!(token.clone())));
+                fresh.set(Some(token));
+            });
+        }
+    });
+    let hook = move || match (text(store, "/zerobyte/webhook_token"), fresh.get()) {
+        (token, _) if token.is_empty() => "Generate a token to get the webhook address for ZeroByte.".to_string(),
+        (token, Some(fresh)) if token == HIDDEN => format!("{}/api/v1/hooks/zerobyte/{fresh}", origin()),
+        (token, None) if token == HIDDEN => format!("{}/api/v1/hooks/zerobyte/<stored token>", origin()),
+        (token, _) => format!("{}/api/v1/hooks/zerobyte/{token}", origin()),
     };
     view! {
-        <p class="lead">"Argus reads every backup schedule and its mirrors from the ZeroByte API and alerts when a run fails or is overdue. Schedules deleted in ZeroByte disappear here on their own. A ZeroByte webhook adds instant updates and backup sizes. Argus only reads, it never starts or changes a backup."</p>
+        <p class="lead">"Argus reads every backup schedule and its mirrors from the ZeroByte API and receives every backup run from a ZeroByte webhook within seconds. It alerts when a backup or mirror fails or no success arrived in time. Schedules deleted in ZeroByte disappear here on their own. Argus only reads and receives, it never starts or changes a backup."</p>
         {row("ZeroByte integration", "Show backups and alert on problems.", switch(store, "/zerobyte", || json!({ "interval": "5m" })))}
         <Show when=enabled>
             {group("API")}
-            {row("API address", "Where this node reaches ZeroByte.", text_input(store, "/zerobyte/url".into(), "http://zerobyte.example.com:4096", true))}
+            {row("API address", "Where this node reaches ZeroByte.", text_input(store, "/zerobyte/url".into(), "http://zerobyte.example.com:4096", false))}
             {row("API key", "ZeroByte keys can also delete backups, keep this node private.", password_input(store, "/zerobyte/api_key".into()))}
             {row("Ask every", "", span_input(store, "/zerobyte/interval".into(), false))}
-            {group("Webhook, optional")}
-            {row("Webhook token", view! { <span class="mono">{hook}</span> }, token_input(store, "/zerobyte/webhook_token".into(), true))}
+            {group("Webhook")}
+            {row("Webhook token", view! { <span class="mono">{hook}</span> }, token_input(store, "/zerobyte/webhook_token".into(), false, fresh))}
         </Show>
         {row("Alert after", "Alert when a backup or mirror fails or no success arrived for this long.", span_input(store, "/shared/backup_max_age".into(), false))}
     }
@@ -942,7 +960,6 @@ fn dashboard(store: Store) -> impl IntoView {
             <button class="btn primary" type="button" disabled=move || busy.get() on:click=change>"Change password"</button>
         })}
         </Show>
-        {row("Session", "", view! { <button class="btn" type="button" on:click=move |_| store.logout()>"Sign out"</button> })}
     }
 }
 
@@ -1027,6 +1044,7 @@ pub fn SettingsPage() -> impl IntoView {
                         view! { <a class="cat" href=Route::Settings(id.to_string()).href() aria-current=current>{move || label(id, fallback)}</a> }
                     })
                     .collect_view()}
+                <button class="cat sign-out" type="button" on:click=move |_| store.logout()>"Sign out"</button>
             </nav>
             <section class="split-detail" aria-label="Settings">
                 <div class="settings">

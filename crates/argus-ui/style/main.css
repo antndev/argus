@@ -1738,6 +1738,11 @@ td .sev {
   font-weight: 600;
 }
 
+.cat.sign-out {
+  margin-top: 12px;
+  color: var(--text-2);
+}
+
 .settings {
   width: 100%;
   max-width: 760px;
@@ -2363,6 +2368,10 @@ li[data-host]:has(> .list-item[aria-current="page"]) {
     border: solid var(--text-3);
     border-width: 1.5px 1.5px 0 0;
     transform: rotate(45deg);
+  }
+
+  .cat.sign-out::after {
+    content: none;
   }
 
   .cat[aria-current="page"],
