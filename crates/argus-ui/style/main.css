@@ -1550,9 +1550,9 @@ td .sev {
 }
 
 .login-card h1 {
-  margin: 0 0 10px;
+  margin: 0 0 12px;
   text-align: center;
-  font-size: 20px;
+  font-size: 24px;
   font-weight: 600;
   letter-spacing: -0.015em;
 }
@@ -1595,7 +1595,7 @@ td .sev {
   border: 0;
   background: transparent;
   color: var(--text);
-  font-size: 14px;
+  font-size: 15px;
   outline: none;
 }
 
