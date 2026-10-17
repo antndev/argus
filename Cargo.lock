@@ -83,7 +83,7 @@ dependencies = [
 
 [[package]]
 name = "argus-agent"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "argus-link",
  "argus-model",
@@ -98,14 +98,14 @@ dependencies = [
 
 [[package]]
 name = "argus-link"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "tungstenite",
 ]
 
 [[package]]
 name = "argus-model"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "serde",
  "serde_json",
@@ -113,7 +113,7 @@ dependencies = [
 
 [[package]]
 name = "argus-node"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -137,7 +137,7 @@ dependencies = [
 
 [[package]]
 name = "argus-ui"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "argus-model",
  "console_error_panic_hook",
