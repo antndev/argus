@@ -9,6 +9,7 @@ use serde::Deserialize;
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub id: Option<String>,
+    #[serde(default = "internal")]
     pub site: String,
     #[serde(default)]
     pub role: String,
@@ -113,6 +114,10 @@ impl Node {
     }
 }
 
+fn internal() -> String {
+    "internal".to_string()
+}
+
 fn default_interval() -> Duration {
     Duration::from_secs(30)
 }
@@ -168,6 +173,7 @@ mod tests {
     #[test]
     fn minimal_config_uses_defaults() {
         let config = Config::parse("site = \"home\"\ninterval = \"1m\"").expect("parses");
+        assert_eq!(Config::parse("interval = 30").expect("parses without a site").site, "internal");
         assert_eq!(config.interval, Duration::from_secs(60));
         assert_eq!(config.agent, "native");
         assert!(config.collectors.ignore_interfaces.contains(&"veth".to_string()));
@@ -177,7 +183,6 @@ mod tests {
     #[test]
     fn rejects_mistakes() {
         assert!(Config::parse("site = \"home\"\nintervall = 30").is_err());
-        assert!(Config::parse("interval = 30").is_err());
         assert!(Config::parse("site = \"home\"\n[[checks]]\nname = \"x\"\ntype = \"smtp\"").is_err());
         assert!(Config::parse("site = \"home\"\n[[checks]]\nname = \"x\"\ntype = \"exec\"\ncommand = []").is_err());
         assert!(Config::parse("site = \"home\"\n[[checks]]\nname = \"x\"\ntype = \"file_age\"\npath = \"/x\"\nmax_age = \"soon\"").is_err());

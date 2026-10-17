@@ -28,7 +28,8 @@ agents ──HTTPS──▶ internal node ◀──sync, started by internal─�
 ```
 
 - One internal node is enough. Without an external node leave out `peer` (Settings, External node, Two nodes off).
-- Every host belongs to one node (its `site`). That node evaluates the host's rules and sends its alerts.
+- Every host belongs to one node, its `site`: `internal` (the default) or `external`. That node evaluates the
+  host's rules and sends its alerts.
 - Agents at home report to both nodes. After 60 seconds without sync each node takes over the hosts it still
   receives reports from. An alert that was already sent is never sent again.
 - The node that raises an alert encrypts it for each phone and hands it to the phone's push service directly. The
@@ -65,7 +66,6 @@ dashboard should not be reachable from the internet, use two names instead (`arg
 
 `crates/argus-node/node.example.json` shows every option. The important parts:
 
-- `name`: this node's name, which is also the `site` of the hosts it owns.
 - `peer`: the other node. The node that sets `url` starts the sync, both use the same `token`.
 - `zerobyte`: API access and the webhook token for backup monitoring.
 - `shared`: settings both nodes keep identical. The node with the newer `revision` wins, on equal revisions the node

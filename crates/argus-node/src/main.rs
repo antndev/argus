@@ -26,7 +26,7 @@ use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post, put};
 
-use crate::config::Config;
+use crate::config::{Config, EXTERNAL, INTERNAL};
 use crate::db::Db;
 use crate::util::{MINUTE, SECOND, now_ms, random_id, sha256_hex};
 
@@ -58,6 +58,7 @@ pub struct App {
     logins: Mutex<(i64, u32)>,
     pub changes: tokio::sync::watch::Sender<u64>,
     links: Mutex<BTreeMap<String, u32>>,
+    aliases: RwLock<HashMap<String, String>>,
     pub argon: tokio::sync::Semaphore,
     pub started: i64,
 }
@@ -69,6 +70,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 impl App {
     pub fn new(config: Config, db: Db) -> Self {
         let hosts = db::hosts(&db).into_iter().map(|s| (s.report.host.id.clone(), s)).collect();
+        let aliases = db::aliases(&db);
         let cursor = db::meta(&db, "peer_cursor");
         let failures = db::alerts(&db)
             .into_iter()
@@ -94,6 +96,7 @@ impl App {
             logins: Mutex::new((0, 0)),
             changes: tokio::sync::watch::Sender::new(0),
             links: Mutex::new(BTreeMap::new()),
+            aliases: RwLock::new(aliases),
             argon: tokio::sync::Semaphore::new(1),
             started: now_ms(),
         }
@@ -115,12 +118,16 @@ impl App {
         let _writer = lock(&self.config_write);
         let current = self.config();
         let mut next = change(&current)?;
+        let names = next.take_legacy_names();
         next.normalize()?;
         next.validate()?;
+        if !names.is_empty() {
+            self.rename(&names);
+        }
         if bump && !next.shared.same(&current.shared) {
             next.shared.revision = now_ms().max(current.shared.revision + 1);
         }
-        if next == *current {
+        if next == *current && names.is_empty() {
             return Ok(false);
         }
         if let Some(path) = &self.config_path {
@@ -182,6 +189,38 @@ impl App {
 
     pub fn peer_down(&self, now: i64) -> bool {
         self.config().peer.is_some() && now - self.peer_state().last_sync.unwrap_or(self.started) > PEER_TIMEOUT
+    }
+
+    pub fn site(&self, site: &str) -> String {
+        if self.config().peer.is_none() {
+            return INTERNAL.to_string();
+        }
+        self.role(site).unwrap_or_else(|| site.to_string())
+    }
+
+    pub fn role(&self, name: &str) -> Option<String> {
+        if name == INTERNAL || name == EXTERNAL {
+            return None;
+        }
+        self.aliases.read().unwrap_or_else(|p| p.into_inner()).get(name).cloned()
+    }
+
+    pub fn rename(&self, names: &[(String, &'static str)]) {
+        {
+            let db = self.db();
+            if let Err(error) = db::rename(&db, names) {
+                log(&format!("renaming the old node names failed: {error}"));
+                return;
+            }
+            *self.aliases.write().unwrap_or_else(|p| p.into_inner()) = db::aliases(&db);
+        }
+        for snapshot in self.hosts.write().unwrap_or_else(|p| p.into_inner()).values_mut() {
+            if let Some((_, role)) = names.iter().find(|(old, _)| *old == snapshot.report.host.site) {
+                snapshot.report.host.site = role.to_string();
+            }
+        }
+        let text: Vec<String> = names.iter().map(|(old, role)| format!("{old} is now {role}")).collect();
+        log(&format!("node names replaced by roles: {}", text.join(", ")));
     }
 
     pub fn owns(&self, site: &str) -> bool {
@@ -482,15 +521,21 @@ async fn main() {
     let hashed = config.clone();
     config.normalize().and_then(|_| config.validate()).unwrap_or_else(|error| fail(format!("invalid config {}: {error}", path.display())));
     if checking {
-        println!("{} is valid: node {}, {} agents, {} rules", path.display(), config.name, config.shared.agents.len(), config.shared.rules.len());
+        println!("{} is valid: {} node, {} agents, {} rules", path.display(), config.name(), config.shared.agents.len(), config.shared.rules.len());
         return;
-    }
-    if config != hashed {
-        config.save(&path).unwrap_or_else(|error| fail(error));
-        log("updated the config file with hashed secrets and generated keys");
     }
     let database = path.parent().unwrap_or(Path::new(".")).join(&config.database);
     let db = db::open(&database.to_string_lossy()).unwrap_or_else(|error| fail(format!("cannot open database {}: {error}", database.display())));
+    let names = config.take_legacy_names();
+    if !names.is_empty() {
+        db::rename(&db, &names).unwrap_or_else(|error| fail(format!("cannot replace the old node names: {error}")));
+        let text: Vec<String> = names.iter().map(|(old, role)| format!("{old} is now {role}")).collect();
+        log(&format!("node names replaced by roles: {}", text.join(", ")));
+    }
+    if config != hashed {
+        config.save(&path).unwrap_or_else(|error| fail(error));
+        log("updated the config file");
+    }
     if resetting && config.peer.as_ref().is_some_and(|peer| peer.url.is_none()) {
         fail("this node takes its password from the internal node, run reset-password there".to_string());
     }
@@ -523,7 +568,7 @@ async fn main() {
     thread::spawn(move || notify::worker(&worker, &queue));
     start_background(&app, receiver);
     let listener = tokio::net::TcpListener::bind(&listen).await.unwrap_or_else(|error| fail(format!("cannot listen on {listen}: {error}")));
-    log(&format!("{} node listening on {listen}", app.config().name));
+    log(&format!("{} node listening on {listen}", app.config().name()));
     let shutdown = async {
         #[cfg(unix)]
         {
@@ -549,7 +594,7 @@ pub fn service_runner(app: &App, service: &config::Service, now: i64) -> Option<
     let snapshots = app.snapshots();
     let mut candidates: Vec<&HostSnapshot> = snapshots
         .iter()
-        .filter(|s| s.report.host.site == config.home() && now - s.last_seen < rules::STALE && config.shared.agents.contains_key(&s.report.host.id))
+        .filter(|s| s.report.host.site == INTERNAL && now - s.last_seen < rules::STALE && config.shared.agents.contains_key(&s.report.host.id))
         .collect();
     candidates.sort_by_key(|s| (config.shared.order.iter().position(|id| *id == s.report.host.id).unwrap_or(usize::MAX), s.report.host.id.clone()));
     candidates.first().map(|s| s.report.host.id.clone())

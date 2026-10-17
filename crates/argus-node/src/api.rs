@@ -14,7 +14,7 @@ use flate2::read::GzDecoder;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::config::{Config, Connection};
+use crate::config::{Config, Connection, EXTERNAL, INTERNAL};
 
 use crate::rules::{self, STALE};
 use crate::sync::bearer;
@@ -37,12 +37,13 @@ fn unzip(body: &[u8]) -> Option<Vec<u8>> {
 fn accept(app: &App, token: &str, raw: &[u8]) -> Result<IngestReply, (StatusCode, String)> {
     let host = agent(app, token).ok_or((StatusCode::UNAUTHORIZED, String::new()))?;
     let config = app.config();
-    let report = serde_json::from_slice::<Report>(raw).map_err(|_| (StatusCode::BAD_REQUEST, String::new()))?;
+    let mut report = serde_json::from_slice::<Report>(raw).map_err(|_| (StatusCode::BAD_REQUEST, String::new()))?;
     if report.host.id != host {
         return Err((StatusCode::FORBIDDEN, String::new()));
     }
-    if config.peer.as_ref().is_some_and(|peer| report.host.site != config.name && report.host.site != peer.name) {
-        let text = format!("unknown site {:?}, use {:?} or {:?}", report.host.site, config.name, config.peer_name().unwrap_or_default());
+    report.host.site = app.site(&report.host.site);
+    if report.host.site != INTERNAL && report.host.site != EXTERNAL {
+        let text = format!("unknown site {:?}, use {INTERNAL:?} or {EXTERNAL:?}", report.host.site);
         return Err((StatusCode::UNPROCESSABLE_ENTITY, text));
     }
     app.store_report(report, now_ms());
@@ -128,7 +129,7 @@ pub async fn overview(State(app): State<Arc<App>>) -> Json<Overview> {
         (alerts, backups)
     };
     let config = app.config();
-    let me = config.name.clone();
+    let me = config.name().to_string();
     let mut hosts: Vec<HostSummary> = snapshots
         .into_iter()
         .map(|snapshot| {
@@ -162,9 +163,9 @@ pub async fn overview(State(app): State<Arc<App>>) -> Json<Overview> {
     let internal = config.peer.is_none() || config.initiates_sync();
     let peer_state = app.peer_state().clone();
     let mut nodes = vec![NodeStatus { name: me, this: true, internal, reachable: true, connected: false, last_sync: peer_state.last_sync }];
-    if let Some(peer) = &config.peer {
+    if let Some(peer) = config.peer_name() {
         nodes.push(NodeStatus {
-            name: peer.name.clone(),
+            name: peer.to_string(),
             this: false,
             internal: !internal,
             reachable: !app.peer_down(now),
@@ -184,7 +185,7 @@ pub async fn overview(State(app): State<Arc<App>>) -> Json<Overview> {
             })
         })
         .collect();
-    Json(Overview { now, node: config.name.clone(), nodes, hosts, services, alerts, backups })
+    Json(Overview { now, node: config.name().to_string(), nodes, hosts, services, alerts, backups })
 }
 
 #[derive(Deserialize)]

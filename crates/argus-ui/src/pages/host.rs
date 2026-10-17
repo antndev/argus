@@ -100,7 +100,7 @@ fn facts(host: &HostSummary, now: f64) -> Vec<(String, String)> {
         ("Hardware".to_string(), format!("{} cores, {} RAM", info.cores, bytes(info.memory_bytes))),
         ("Uptime".to_string(), format::duration(uptime)),
         ("Agent".to_string(), format!("{} {}", format::capitalize(&info.agent), info.version)),
-        ("Alerts from".to_string(), format!("{} node", host.owner)),
+        ("Alerts from".to_string(), format::capitalize(&format!("{} node", host.owner))),
     ];
     for raid in &host.inventory.raid {
         list.push((format!("RAID {}", raid.name), format!("{}, {} {}", raid.level, raid.state, raid.devices)));

@@ -284,12 +284,11 @@ pub fn evaluate(app: &App, now: i64) {
         }
     }
     let config = app.config();
-    keys_in_scope.extend(active.values().filter(|a| a.rule == "node" && a.owner == config.name).map(|a| a.key.clone()));
-    if let Some(peer) = &config.peer {
-        let key = format!("{}|node|", peer.name);
-        keys_in_scope.insert(key);
+    keys_in_scope.extend(active.values().filter(|a| a.rule == "node" && a.owner == config.name()).map(|a| a.key.clone()));
+    if let Some(peer) = config.peer_name() {
+        keys_in_scope.insert(format!("{peer}|node|"));
         if peer_down {
-            let silent = snapshots.iter().filter(|s| s.report.host.site == peer.name && now - s.last_seen >= STALE).count();
+            let silent = snapshots.iter().filter(|s| s.report.host.site == peer && now - s.last_seen >= STALE).count();
             let since = match app.peer_state().last_sync {
                 Some(last) => format!("No sync for {}", duration_text(now - last)),
                 None => "No sync since this node started".to_string(),
@@ -300,7 +299,7 @@ pub fn evaluate(app: &App, now: i64) {
                 n => format!("{since}, no reports from {n} hosts"),
             };
             let title = format!("{} unreachable", peer_role(&config));
-            conditions.push(Condition::new(&peer.name, "node", "", Severity::Critical, title, detail));
+            conditions.push(Condition::new(peer, "node", "", Severity::Critical, title, detail));
         }
     }
     let has_backups = config.zerobyte.is_some() || !schedules.is_empty();
@@ -325,7 +324,7 @@ fn rank(alert: &Alert) -> u8 {
 }
 
 fn reconcile(app: &App, now: i64, conditions: Vec<Condition>, hosts: &HashSet<String>, keys: &HashSet<String>) {
-    let me = app.config().name.clone();
+    let me = app.config().name().to_string();
     let mut changes: Vec<(Alert, bool)> = Vec::new();
     let mut transitions: Vec<(Alert, bool)> = Vec::new();
     let mut saved = false;
@@ -499,10 +498,10 @@ mod tests {
     use argus_model::{CheckResult, Container, HostInfo, Inventory, Raid, Report};
 
     fn config(peer: bool) -> Config {
-        let mut config = Config { name: "home".into(), ..Default::default() };
+        let mut config = Config::default();
         config.shared.rules = default_rules();
         if peer {
-            config.peer = Some(Peer { name: "vps".into(), url: None, token: "t".into() });
+            config.peer = Some(Peer { legacy_name: None, url: Some("https://external.example.com".into()), token: "t".into() });
         }
         config
     }
@@ -525,16 +524,16 @@ mod tests {
     fn metric_rule_waits_for_hold_then_fires_once_and_resolves() {
         let app = app(false);
         let start = 1_000_000_000;
-        app.store_report(report("h", "home", vec![Metric::new("cpu", "", "total", 95.0)]), start);
+        app.store_report(report("h", "internal", vec![Metric::new("cpu", "", "total", 95.0)]), start);
         evaluate(&app, start);
         assert_eq!(alerts(&app)["h|CPU|"].state, AlertState::Pending);
-        app.store_report(report("h", "home", vec![Metric::new("cpu", "", "total", 95.0)]), start + 5 * MINUTE);
+        app.store_report(report("h", "internal", vec![Metric::new("cpu", "", "total", 95.0)]), start + 5 * MINUTE);
         evaluate(&app, start + 5 * MINUTE);
         let fired = &alerts(&app)["h|CPU|"];
         assert_eq!(fired.state, AlertState::Firing);
         assert!(fired.notified_fire);
         assert_eq!(fired.title, "CPU at 95%");
-        app.store_report(report("h", "home", vec![Metric::new("cpu", "", "total", 20.0)]), start + 6 * MINUTE);
+        app.store_report(report("h", "internal", vec![Metric::new("cpu", "", "total", 20.0)]), start + 6 * MINUTE);
         evaluate(&app, start + 6 * MINUTE);
         let resolved = &alerts(&app)["h|CPU|"];
         assert_eq!(resolved.state, AlertState::Resolved);
@@ -546,16 +545,16 @@ mod tests {
     #[test]
     fn short_spike_never_fires_and_leaves_a_tombstone_for_the_peer() {
         let app = app(false);
-        app.store_report(report("h", "home", vec![Metric::new("cpu", "", "total", 95.0)]), 0);
+        app.store_report(report("h", "internal", vec![Metric::new("cpu", "", "total", 95.0)]), 0);
         evaluate(&app, 0);
         let pending = alerts(&app)["h|CPU|"].clone();
-        app.store_report(report("h", "home", vec![Metric::new("cpu", "", "total", 10.0)]), MINUTE);
+        app.store_report(report("h", "internal", vec![Metric::new("cpu", "", "total", 10.0)]), MINUTE);
         evaluate(&app, MINUTE);
         let cleared = &alerts(&app)["h|CPU|"];
         assert_eq!(cleared.state, AlertState::Resolved);
         assert!(!cleared.notified_fire && !cleared.notified_resolve);
         assert!(cleared.updated > pending.updated);
-        app.store_report(report("h", "home", vec![Metric::new("cpu", "", "total", 95.0)]), 30 * MINUTE);
+        app.store_report(report("h", "internal", vec![Metric::new("cpu", "", "total", 95.0)]), 30 * MINUTE);
         evaluate(&app, 30 * MINUTE);
         assert_eq!(alerts(&app)["h|CPU|"].state, AlertState::Pending);
     }
@@ -563,7 +562,7 @@ mod tests {
     #[test]
     fn warning_check_stays_open_while_failures_build_up() {
         let app = app(false);
-        let mut degraded = report("h", "home", Vec::new());
+        let mut degraded = report("h", "internal", Vec::new());
         degraded.checks = vec![CheckResult { name: "Web".into(), status: CheckStatus::Warning, ..Default::default() }];
         app.store_report(degraded.clone(), 0);
         evaluate(&app, 0);
@@ -585,7 +584,7 @@ mod tests {
     #[test]
     fn unreachable_host_keeps_other_alerts_untouched() {
         let app = app(false);
-        app.store_report(report("h", "home", vec![Metric::new("fs", "/", "used", 90.0)]), 0);
+        app.store_report(report("h", "internal", vec![Metric::new("fs", "/", "used", 90.0)]), 0);
         evaluate(&app, 0);
         assert_eq!(alerts(&app)["h|Disk|/"].state, AlertState::Firing);
         evaluate(&app, 2 * MINUTE);
@@ -597,7 +596,7 @@ mod tests {
     #[test]
     fn restarted_node_gives_agents_time_before_calling_hosts_unreachable() {
         let mut app = app(false);
-        app.store_report(report("h", "home", Vec::new()), 0);
+        app.store_report(report("h", "internal", Vec::new()), 0);
         app.started = 10 * MINUTE;
         evaluate(&app, 10 * MINUTE + 30 * SECOND);
         assert!(alerts(&app).is_empty());
@@ -609,14 +608,14 @@ mod tests {
     fn peer_hosts_are_left_alone_until_the_peer_is_down() {
         let app = app(true);
         app.peer_state().last_sync = Some(0);
-        app.store_report(report("v", "vps", vec![Metric::new("fs", "/", "used", 99.0)]), 0);
+        app.store_report(report("v", "external", vec![Metric::new("fs", "/", "used", 99.0)]), 0);
         evaluate(&app, 30 * SECOND);
         assert!(alerts(&app).is_empty());
-        app.store_report(report("v", "vps", vec![Metric::new("fs", "/", "used", 99.0)]), 2 * MINUTE);
+        app.store_report(report("v", "external", vec![Metric::new("fs", "/", "used", 99.0)]), 2 * MINUTE);
         evaluate(&app, 2 * MINUTE);
         let all = alerts(&app);
         assert_eq!(all["v|Disk|/"].state, AlertState::Firing);
-        assert_eq!(all["vps|node|"].state, AlertState::Firing);
+        assert_eq!(all["external|node|"].state, AlertState::Firing);
     }
 
     #[test]
@@ -627,11 +626,11 @@ mod tests {
         config.shared.services =
             vec![crate::config::Service { check: serde_json::from_str(r#"{"name":"Allsky","type":"ping","host":"10.0.0.72"}"#).expect("check"), runner: None }];
         let app = App::new(config, db::open(":memory:").expect("db"));
-        app.store_report(report("a", "home", Vec::new()), 0);
-        app.store_report(report("b", "home", Vec::new()), 0);
+        app.store_report(report("a", "internal", Vec::new()), 0);
+        app.store_report(report("b", "internal", Vec::new()), 0);
         let service = app.config().shared.services[0].clone();
         assert_eq!(crate::service_runner(&app, &service, 0).as_deref(), Some("b"));
-        let mut run = report("b", "home", vec![Metric::new("check", "service:Allsky", "ok", 0.0)]);
+        let mut run = report("b", "internal", vec![Metric::new("check", "service:Allsky", "ok", 0.0)]);
         run.checks = vec![
             CheckResult { name: "service:Allsky".into(), status: CheckStatus::Failed, message: "Timed out".into(), ..Default::default() },
             CheckResult { name: "Web".into(), ..Default::default() },
@@ -654,7 +653,7 @@ mod tests {
         let app = app(false);
         let container =
             |name: &str, state: &str, policy: &str| Container { name: name.into(), state: state.into(), restart_policy: policy.into(), ..Default::default() };
-        let mut report = report("h", "home", Vec::new());
+        let mut report = report("h", "internal", Vec::new());
         report.inventory.containers = vec![
             container("minecraft", "exited", "unless-stopped"),
             container("dump", "exited", "no"),
@@ -674,7 +673,7 @@ mod tests {
     #[test]
     fn checks_need_three_failures_and_inventory_problems_alert() {
         let app = app(false);
-        let mut failing = report("h", "home", Vec::new());
+        let mut failing = report("h", "internal", Vec::new());
         failing.checks = vec![CheckResult { name: "Web".into(), status: CheckStatus::Failed, ..Default::default() }];
         failing.inventory =
             Inventory { raid: vec![Raid { name: "md0".into(), degraded: true, ..Default::default() }], reboot_required: Some(true), ..Default::default() };
@@ -694,7 +693,7 @@ mod tests {
     #[test]
     fn firing_check_survives_a_node_restart() {
         let first = app(false);
-        let mut failing = report("h", "home", Vec::new());
+        let mut failing = report("h", "internal", Vec::new());
         failing.checks = vec![CheckResult { name: "Web".into(), status: CheckStatus::Failed, ..Default::default() }];
         for minute in 0..3 {
             first.store_report(failing.clone(), minute * MINUTE);

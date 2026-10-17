@@ -40,7 +40,7 @@ pub fn same_secret(provided: &str, expected: &str) -> bool {
 
 fn build(app: &App, now: i64, cursor: i64, with_samples: bool) -> SyncPayload {
     let config = app.config();
-    let me = config.name.clone();
+    let me = config.name();
     let hosts: Vec<_> = app.snapshots().into_iter().filter(|s| with_samples && s.report.host.site == me).collect();
     let ids: Vec<String> = hosts.iter().map(|s| s.report.host.id.clone()).collect();
     let db = app.db();
@@ -94,7 +94,13 @@ fn newer<T>(local: Option<&T>, incoming: &T, stamp: impl Fn(&T) -> i64) -> bool 
     local.is_none_or(|l| stamp(incoming) > stamp(l))
 }
 
-pub fn merge(app: &App, payload: SyncPayload, initiator: bool) {
+pub fn merge(app: &App, mut payload: SyncPayload, initiator: bool) {
+    for snapshot in &mut payload.hosts {
+        snapshot.report.host.site = app.site(&snapshot.report.host.site);
+    }
+    for alert in &mut payload.alerts {
+        db::rename_alert(alert, |name| app.role(name));
+    }
     adopt(app, payload.config.clone(), initiator);
     app.peer_state().links = payload.links.clone();
     {
@@ -236,20 +242,20 @@ fn stream_exchange(link: &mut Link, url: &str, peer: &Peer, payload: &SyncPayloa
     match link.request(&format!("{}/api/v1/sync", url.trim_end_matches('/')), &peer.token, body, Duration::from_secs(60)) {
         Ok(reply) => {
             if !lost {
-                log(&format!("persistent connection to the {} node is back", peer.name));
+                log("persistent connection to the external node is back");
             }
             serde_json::from_slice(&reply).map_err(|e| e.to_string())
         }
         Err(error) => {
             if lost {
-                log(&format!("persistent connection to the {} node failed ({error}), retrying and syncing by request meanwhile", peer.name));
+                log(&format!("persistent connection to the external node failed ({error}), retrying and syncing by request meanwhile"));
             }
             exchange(url, &peer.token, payload)
         }
     }
 }
 
-fn settle(link: &mut Link, peer: &Peer, changes: &mut watch::Receiver<u64>, wake: &Receiver<()>) {
+fn settle(link: &mut Link, changes: &mut watch::Receiver<u64>, wake: &Receiver<()>) {
     let heartbeat = Instant::now() + until_tick(now_ms());
     while Instant::now() < heartbeat {
         if wake.try_iter().count() > 0 {
@@ -263,7 +269,7 @@ fn settle(link: &mut Link, peer: &Peer, changes: &mut watch::Receiver<u64>, wake
             Ok(true) => return,
             Ok(false) => {}
             Err(error) => {
-                log(&format!("persistent connection to the {} node lost ({error}), retrying and syncing by request meanwhile", peer.name));
+                log(&format!("persistent connection to the external node lost ({error}), retrying and syncing by request meanwhile"));
                 return;
             }
         }
@@ -296,7 +302,7 @@ pub fn run(app: &App, wake: &Receiver<()>) {
         match result {
             Ok(response) => {
                 if failing {
-                    log(&format!("sync with {} node restored", peer.name));
+                    log("sync with the external node restored");
                     failing = false;
                 }
                 let full = response.samples.len() >= SAMPLE_LIMIT / 2;
@@ -314,14 +320,14 @@ pub fn run(app: &App, wake: &Receiver<()>) {
             }
             Err(error) => {
                 if !failing {
-                    log(&format!("sync with {} node failed: {error}", peer.name));
+                    log(&format!("sync with the external node failed: {error}"));
                     failing = true;
                 }
             }
         }
         app.peer_state().streams = u32::from(link.connected());
         if persistent && link.connected() {
-            settle(&mut link, &peer, &mut changes, wake);
+            settle(&mut link, &mut changes, wake);
         } else {
             let _ = wake.recv_timeout(until_tick(now_ms()));
         }
@@ -341,20 +347,22 @@ mod tests {
         assert_eq!(until_tick(31_000), Duration::from_secs(4));
     }
 
-    fn app(name: &str) -> App {
-        let mut config = Config { name: name.into(), ..Default::default() };
-        config.peer = Some(Peer { name: "other".into(), url: None, token: "secret-secret-secret".into() });
+    fn app(internal: bool) -> App {
+        let mut config = Config::default();
+        let url = internal.then(|| "https://external.example.com".to_string());
+        config.peer = Some(Peer { legacy_name: None, url, token: "secret-secret-secret".into() });
         App::new(config, db::open(":memory:").expect("db"))
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn persistent_links_carry_reports_syncs_and_change_notes() {
         use std::io::Write;
-        let mut config = Config { name: "vps".into(), ..Default::default() };
-        config.peer = Some(Peer { name: "home".into(), url: None, token: "secret-secret-secret".into() });
+        let mut config = Config::parse(r#"{"name":"vps","peer":{"name":"home","token":"secret-secret-secret"}}"#).expect("old config");
         config.shared.agents.insert("h".into(), sha256_hex(b"agent-token-0123456789"));
         config.shared.connection = Connection::Persistent;
+        let names = config.take_legacy_names();
         let app = Arc::new(App::new(config, db::open(":memory:").expect("db")));
+        app.rename(&names);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let base = format!("http://{}", listener.local_addr().expect("address"));
         tokio::spawn(axum::serve(listener, crate::router(app.clone())).into_future());
@@ -390,13 +398,15 @@ mod tests {
 
     #[test]
     fn newer_alerts_win_and_peer_samples_arrive() {
-        let home = app("home");
-        let vps = app("vps");
+        let home = app(true);
+        let vps = app(false);
         db::save_alert(&home.db(), &Alert { key: "k".into(), state: AlertState::Firing, updated: 10, ..Default::default() }).expect("save");
         db::save_alert(&vps.db(), &Alert { key: "k".into(), state: AlertState::Resolved, updated: 20, notified_resolve: true, ..Default::default() })
             .expect("save");
-        let snapshot =
-            HostSnapshot { report: Report { host: HostInfo { id: "v".into(), site: "vps".into(), ..Default::default() }, ..Default::default() }, last_seen: 5 };
+        let snapshot = HostSnapshot {
+            report: Report { host: HostInfo { id: "v".into(), site: "external".into(), ..Default::default() }, ..Default::default() },
+            last_seen: 5,
+        };
         vps.put_snapshot(snapshot);
         db::insert_samples(&mut vps.db(), &[Sample { host: "v".into(), key: "cpu||total".into(), time: 5, value: 1.0 }]).expect("samples");
         let response = build(&vps, 30, 0, true);
@@ -412,8 +422,8 @@ mod tests {
 
     #[test]
     fn early_receipts_reach_the_sending_node() {
-        let home = app("home");
-        let vps = app("vps");
+        let home = app(true);
+        let vps = app(false);
         db::mark_delivered(&vps.db(), "m1", 2_000).expect("receipt");
         db::save_message(&home.db(), &Message { id: "m1".into(), time: 1_000, ..Default::default() }).expect("message");
         merge(&vps, build(&home, 1_500, 0, false), false);
@@ -431,8 +441,8 @@ mod tests {
 
     #[test]
     fn newest_shared_settings_win_and_the_initiator_wins_ties() {
-        let home = app("home");
-        let vps = app("vps");
+        let home = app(true);
+        let vps = app(false);
         shared(&home, 3, 0);
         merge(&vps, build(&home, 0, 0, false), false);
         assert_eq!(vps.config().shared.rules.len(), 3);
@@ -449,10 +459,12 @@ mod tests {
 
     #[test]
     fn the_login_only_travels_from_the_internal_node() {
-        let mut config = Config { name: "home".into(), ..Default::default() };
-        config.peer = Some(Peer { name: "vps".into(), url: Some("https://vps.example.com".into()), token: "secret-secret-secret".into() });
+        let config = Config {
+            peer: Some(Peer { legacy_name: None, url: Some("https://vps.example.com".into()), token: "secret-secret-secret".into() }),
+            ..Default::default()
+        };
         let home = App::new(config, db::open(":memory:").expect("db"));
-        let vps = app("vps");
+        let vps = app(false);
         db::create_secret(&home.db(), "dashboard_password", "hash").expect("store");
         assert!(build(&vps, 0, 0, true).login.is_none());
         merge(&vps, build(&home, 0, 0, false), false);

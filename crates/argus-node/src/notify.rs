@@ -99,8 +99,8 @@ pub fn deliver(app: &App, messages: Vec<Message>) -> String {
         }
     }
     match devices {
-        1 => format!("sent by {} node to 1 device", config.name),
-        n => format!("sent by {} node to {n} devices", config.name),
+        1 => format!("sent by {} node to 1 device", config.name()),
+        n => format!("sent by {} node to {n} devices", config.name()),
     }
 }
 
@@ -284,7 +284,7 @@ pub async fn test(State(app): State<Arc<App>>, Json(test): Json<Test>) -> Respon
         id: random_id(12),
         time: now_ms(),
         title: "Test notification".to_string(),
-        message: format!("Sent from the {} node to {}", config.name, device.name),
+        message: format!("Sent from the {} node to {}", config.name(), device.name),
         priority: 3,
         delivered: None,
     };

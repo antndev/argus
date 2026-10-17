@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use argus_model::{Alert, AlertState, BackupSchedule, Event, HostSnapshot, Message, Sample, SeriesData};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS receipts (id TEXT PRIMARY KEY, time INTEGER NOT NULL)
 CREATE TABLE IF NOT EXISTS deliveries (id TEXT PRIMARY KEY, time INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS backups (name TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS aliases (name TEXT PRIMARY KEY, role TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS events_time ON events (time);
 CREATE INDEX IF NOT EXISTS messages_time ON messages (time);
 ";
@@ -201,6 +202,47 @@ pub fn delete_alert(db: &Db, key: &str) -> rusqlite::Result<()> {
     Ok(())
 }
 
+pub fn aliases(db: &Db) -> HashMap<String, String> {
+    let Ok(mut statement) = db.prepare("SELECT name, role FROM aliases") else { return HashMap::new() };
+    statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?))).map(|rows| rows.flatten().collect()).unwrap_or_default()
+}
+
+pub fn rename_alert(alert: &mut Alert, role: impl Fn(&str) -> Option<String>) {
+    if let Some(owner) = role(&alert.owner) {
+        alert.owner = owner;
+    }
+    if alert.rule == "node"
+        && let Some(host) = role(&alert.host)
+    {
+        alert.key = format!("{host}{}", alert.key.strip_prefix(alert.host.as_str()).unwrap_or("|node|"));
+        alert.host = host;
+    }
+}
+
+pub fn rename(db: &Db, names: &[(String, &str)]) -> rusqlite::Result<()> {
+    for (old, role) in names {
+        db.execute("INSERT OR REPLACE INTO aliases (name, role) VALUES (?1, ?2)", params![old, role])?;
+    }
+    let role = |name: &str| names.iter().find(|(old, _)| old == name).map(|(_, role)| role.to_string());
+    for mut snapshot in hosts(db) {
+        if let Some(site) = role(&snapshot.report.host.site) {
+            snapshot.report.host.site = site;
+            save_host(db, &snapshot)?;
+        }
+    }
+    for mut alert in alerts(db) {
+        let before = alert.clone();
+        rename_alert(&mut alert, role);
+        if alert != before {
+            if alert.key != before.key {
+                delete_alert(db, &before.key)?;
+            }
+            save_alert(db, &alert)?;
+        }
+    }
+    Ok(())
+}
+
 pub fn prune(db: &Db, now: i64) {
     let stale: Vec<String> =
         alerts(db).into_iter().filter(|a| a.state == AlertState::Resolved && a.resolved_at.is_some_and(|t| t < now - DAY)).map(|a| a.key).collect();
@@ -338,6 +380,32 @@ pub fn set_meta(db: &Db, key: &str, value: i64) -> rusqlite::Result<()> {
 mod tests {
     use super::*;
     use crate::config::Span;
+
+    #[test]
+    fn old_node_names_become_roles() {
+        use argus_model::{AlertState, HostInfo, HostSnapshot, Report};
+        let db = open(":memory:").expect("db");
+        let host = |id: &str, site: &str| HostSnapshot {
+            report: Report { host: HostInfo { id: id.into(), site: site.into(), ..Default::default() }, ..Default::default() },
+            last_seen: 1,
+        };
+        save_host(&db, &host("nas", "home")).expect("host");
+        save_host(&db, &host("vps-1", "vps")).expect("host");
+        save_alert(&db, &Alert { key: "nas|CPU|".into(), host: "nas".into(), rule: "CPU".into(), owner: "home".into(), ..Default::default() }).expect("alert");
+        save_alert(
+            &db,
+            &Alert { key: "vps|node|".into(), host: "vps".into(), rule: "node".into(), owner: "home".into(), state: AlertState::Firing, ..Default::default() },
+        )
+        .expect("alert");
+        rename(&db, &[("home".into(), "internal"), ("vps".into(), "external")]).expect("rename");
+        let sites: Vec<String> = hosts(&db).into_iter().map(|h| h.report.host.site).collect();
+        assert!(sites.contains(&"internal".to_string()) && sites.contains(&"external".to_string()));
+        let alerts: HashMap<String, Alert> = alerts(&db).into_iter().map(|a| (a.key.clone(), a)).collect();
+        assert_eq!(alerts.len(), 2);
+        assert_eq!(alerts["nas|CPU|"].owner, "internal");
+        assert_eq!((alerts["external|node|"].host.as_str(), alerts["external|node|"].owner.as_str()), ("external", "internal"));
+        assert_eq!(aliases(&db)["vps"], "external");
+    }
 
     fn retention() -> Retention {
         Retention { raw: Span(7 * DAY), medium: Span(90 * DAY), long: Span(730 * DAY), daily: Span(3650 * DAY) }

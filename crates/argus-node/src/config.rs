@@ -35,10 +35,14 @@ impl Serialize for Span {
     }
 }
 
+pub const INTERNAL: &str = "internal";
+pub const EXTERNAL: &str = "external";
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    pub name: String,
+    #[serde(default, rename = "name", skip_serializing)]
+    pub legacy_name: Option<String>,
     #[serde(default = "default_listen")]
     pub listen: String,
     #[serde(default = "default_database")]
@@ -145,7 +149,8 @@ impl Default for Retention {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Peer {
-    pub name: String,
+    #[serde(default, rename = "name", skip_serializing)]
+    pub legacy_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     pub token: String,
@@ -211,7 +216,7 @@ pub struct Rule {
 
 impl Default for Config {
     fn default() -> Self {
-        serde_json::from_str(r#"{"name":"node"}"#).expect("defaults")
+        serde_json::from_str("{}").expect("defaults")
     }
 }
 
@@ -281,13 +286,7 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        if !plain_name(&self.name) {
-            return Err("name needs letters, digits, dash, dot or underscore".into());
-        }
         if let Some(peer) = &self.peer {
-            if !plain_name(&peer.name) || peer.name == self.name {
-                return Err("the peer needs its own name, different from this node".into());
-            }
             if peer.token.trim().len() < 16 {
                 return Err("the peer token needs at least 16 characters".into());
             }
@@ -424,19 +423,26 @@ impl Config {
         Ok(())
     }
 
-    pub fn peer_name(&self) -> Option<&str> {
-        self.peer.as_ref().map(|p| p.name.as_str())
+    pub fn name(&self) -> &'static str {
+        if self.peer.as_ref().is_some_and(|p| p.url.is_none()) { EXTERNAL } else { INTERNAL }
+    }
+
+    pub fn peer_name(&self) -> Option<&'static str> {
+        self.peer.as_ref().map(|_| if self.name() == INTERNAL { EXTERNAL } else { INTERNAL })
     }
 
     pub fn initiates_sync(&self) -> bool {
         self.peer.as_ref().is_some_and(|p| p.url.is_some())
     }
 
-    pub fn home(&self) -> &str {
-        match &self.peer {
-            Some(peer) if peer.url.is_none() => &peer.name,
-            _ => &self.name,
+    pub fn take_legacy_names(&mut self) -> Vec<(String, &'static str)> {
+        let (me, peer) = (self.name(), self.peer_name());
+        let mut names: Vec<(String, &'static str)> = self.legacy_name.take().map(|old| (old, me)).into_iter().collect();
+        if let (Some(old), Some(role)) = (self.peer.as_mut().and_then(|p| p.legacy_name.take()), peer) {
+            names.push((old, role));
         }
+        names.retain(|(old, role)| old != role);
+        names
     }
 }
 
@@ -533,12 +539,25 @@ mod tests {
         let text = serde_json::to_string(&config).expect("serializes");
         assert!(text.contains(r#""raw":"7d""#));
         assert_eq!(Config::parse(&text).expect("parses"), config);
-        assert!(Config::parse(r#"{"name":"home","shared":{"rules":[]}}"#).expect("parses").shared.rules.is_empty());
+        assert!(Config::parse(r#"{"shared":{"rules":[]}}"#).expect("parses").shared.rules.is_empty());
+    }
+
+    #[test]
+    fn roles_come_from_the_peer_and_old_names_are_taken_once() {
+        let mut external = Config::parse(r#"{"name":"vps","peer":{"name":"home","token":"secret-secret-secret"}}"#).expect("parses");
+        assert_eq!((external.name(), external.peer_name()), (EXTERNAL, Some(INTERNAL)));
+        assert_eq!(external.take_legacy_names(), [("vps".to_string(), EXTERNAL), ("home".to_string(), INTERNAL)]);
+        assert!(external.take_legacy_names().is_empty());
+        let written = serde_json::to_value(&external).expect("json");
+        assert!(written.get("name").is_none() && written["peer"].get("name").is_none());
+        let internal = Config::parse(r#"{"peer":{"url":"https://vps.example.com","token":"secret-secret-secret"}}"#).expect("parses");
+        assert_eq!((internal.name(), internal.peer_name()), (INTERNAL, Some(EXTERNAL)));
+        assert_eq!((Config::default().name(), Config::default().peer_name()), (INTERNAL, None));
     }
 
     #[test]
     fn rejects_unknown_fields_and_bad_values() {
-        assert!(Config::parse(r#"{"name":"home","listen_port":1}"#).is_err());
+        assert!(Config::parse(r#"{"listen_port":1}"#).is_err());
         let mut config = Config::default();
         config.shared.checks.insert("ghost".into(), Vec::new());
         assert!(config.validate().is_err());

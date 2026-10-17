@@ -406,7 +406,6 @@ fn general(store: Store) -> impl IntoView {
     let path = move || store.saved.with(|s| s.as_ref().and_then(|s| s.path.clone())).unwrap_or_else(|| "Not saved to a file".to_string());
     view! {
         <p class="lead">"Changes save on their own. The config file stays in sync, edits there apply within seconds."</p>
-        {row("Node name", "Agents name it as their site. Each node needs its own name.", text_input(store, "/name".into(), "internal", false))}
         {row("Listen address", "Takes effect after a restart.", text_input(store, "/listen".into(), "0.0.0.0:8090", false))}
         {row("Database", "Takes effect after a restart.", text_input(store, "/database".into(), "argus.db", false))}
         {row(
@@ -473,7 +472,8 @@ fn agents(store: Store) -> impl IntoView {
     };
     let snippet = move || {
         fresh.get().map(|(id, token)| {
-            let config = format!("id = \"{id}\"\nsite = \"{}\"\n\n[[nodes]]\nurl = \"{}\"\ntoken = \"{token}\"", text(store, "/name"), origin());
+            let site = if read(store, "/peer").is_some() && read(store, "/peer/url").is_none() { "site = \"external\"\n" } else { "" };
+            let config = format!("id = \"{id}\"\n{site}\n[[nodes]]\nurl = \"{}\"\ntoken = \"{token}\"", origin());
             let copied = config.clone();
             view! {
                 <div class="callout">
@@ -835,13 +835,10 @@ fn peer(store: Store) -> impl IntoView {
         let to_internal = event_target_value(&ev) == "internal";
         let address = saved(store, "/peer/url").filter(|_| to_internal).unwrap_or_else(|| json!(""));
         write(store, "/peer/url", to_internal.then_some(address));
-        if matches!(text(store, "/peer/name").as_str(), "" | "internal" | "external") {
-            write(store, "/peer/name", Some(json!(if to_internal { "external" } else { "internal" })));
-        }
     };
     view! {
         <p class="lead">"Two nodes watch each other. The internal node starts every sync, so nothing ever connects into your network. After 60 s without sync each node takes over the hosts it still hears from."</p>
-        {row("Two nodes", "Turn off to run a single node.", switch(store, "/peer", || json!({ "name": "external", "url": "", "token": "" })))}
+        {row("Two nodes", "Turn off to run a single node.", switch(store, "/peer", || json!({ "url": "", "token": "" })))}
         <Show when=enabled>
             {row("This node", "The internal node runs at home, the external one is reachable from the internet.", view! {
                 <select class="input" prop:value=move || if internal() { "internal" } else { "external" } on:change=role>
@@ -849,7 +846,6 @@ fn peer(store: Store) -> impl IntoView {
                     <option value="external">"External"</option>
                 </select>
             })}
-            {row("Other node's name", "Its node name under General.", text_input(store, "/peer/name".into(), "external", false))}
             <Show when=internal>
                 {row("Address", "Where this node reaches the external node.", text_input(store, "/peer/url".into(), "https://argus.external.example.com", false))}
             </Show>
@@ -1001,7 +997,7 @@ fn json_editor(store: Store) -> impl IntoView {
 }
 
 fn about(store: Store) -> impl IntoView {
-    let node = move || store.overview.with(|o| o.as_ref().map(|o| o.node.clone())).unwrap_or_default();
+    let node = move || store.overview.with(|o| o.as_ref().map(|o| format::capitalize(&o.node))).unwrap_or_default();
     view! {
         {row("Version", "", view! { <span class="value">{env!("CARGO_PKG_VERSION")}</span> })}
         {row("Node", "", view! { <span class="value">{node}</span> })}

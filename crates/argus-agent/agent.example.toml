@@ -1,5 +1,5 @@
 id = "server-1"            # optional, default is the hostname
-site = "internal"          # which node owns this host, its node name
+site = "internal"          # internal (default) or external, the node that alerts for this host
 role = "Docker host"       # optional free text
 os = "Ubuntu 24.04"        # optional, overrides the name from os-release
 interval = 30              # seconds, or "30s", "5m"; reports go out on the clock (:00 and :30)
