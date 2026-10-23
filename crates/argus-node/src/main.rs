@@ -286,19 +286,19 @@ impl App {
             for mut check in standalone {
                 check.name = check.name.trim_start_matches(SERVICE_PREFIX).to_string();
                 let key = format!("{SERVICES_HOST}|{}", check.name);
-                if check.status == CheckStatus::Failed {
-                    *failures.entry(key).or_default() += 1;
-                } else {
+                if check.status == CheckStatus::Ok {
                     failures.remove(&key);
+                } else {
+                    *failures.entry(key).or_default() += 1;
                 }
                 services.insert(check.name.clone(), ServiceStatus { check, runner: host.clone(), last_seen: now });
             }
             for check in &report.checks {
                 let key = format!("{host}|{}", check.name);
-                if check.status == CheckStatus::Failed {
-                    *failures.entry(key).or_default() += 1;
-                } else {
+                if check.status == CheckStatus::Ok {
                     failures.remove(&key);
+                } else {
+                    *failures.entry(key).or_default() += 1;
                 }
             }
         }

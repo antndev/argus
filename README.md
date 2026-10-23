@@ -77,7 +77,8 @@ dashboard should not be reachable from the internet, use two names instead (`arg
     agent runs each one (the first one in `order` that reports, or the one set as `runner`), but the dashboard shows,
     orders and alerts it as its own service.
   - `rules`: metric thresholds. `metric` is `group|item|field` with `*` as wildcard, `hosts` accepts globs and
-    `!exclusions`, `for` is how long the condition must hold. Host unreachable, failing checks, degraded RAID, SMART
+    `!exclusions`, `for` is how long the condition must hold. Host unreachable, checks that fail or degrade three runs
+    in a row (a single lost ping is not enough), degraded RAID, SMART
     warnings, failed systemd units, pending reboots and containers that stopped although their restart policy is
     `always` or `unless-stopped` always alert. A container stopped by hand (`docker stop`, `docker compose stop`) shows
     as stopped and does not alert.

@@ -112,7 +112,7 @@ fn service_conditions(app: &App, now: i64, active: &HashMap<String, Alert>) -> V
         let (severity, title) = match (status.check.status, ongoing) {
             (CheckStatus::Failed, _) if failed >= CHECK_FAILURES => (Severity::Critical, format!("{name} failing")),
             (CheckStatus::Failed, Some(alert)) => (alert.severity, alert.title.clone()),
-            (CheckStatus::Warning, _) => (Severity::Warning, format!("{name} degraded")),
+            (CheckStatus::Warning, _) if failed >= CHECK_FAILURES => (Severity::Warning, format!("{name} degraded")),
             _ => continue,
         };
         conditions.push(Condition::new(SERVICES_HOST, "check", name, severity, title, status.check.message.clone()));
@@ -131,7 +131,7 @@ fn inventory_conditions(app: &App, snapshot: &HostSnapshot, active: &HashMap<Str
         let (severity, title) = match (check.status, ongoing) {
             (CheckStatus::Failed, _) if failed >= CHECK_FAILURES => (Severity::Critical, format!("{} failing", check.name)),
             (CheckStatus::Failed, Some(alert)) => (alert.severity, alert.title.clone()),
-            (CheckStatus::Warning, _) => (Severity::Warning, format!("{} degraded", check.name)),
+            (CheckStatus::Warning, _) if failed >= CHECK_FAILURES => (Severity::Warning, format!("{} degraded", check.name)),
             _ => continue,
         };
         conditions.push(Condition::new(host, "check", &check.name, severity, title, check.message.clone()));
@@ -458,7 +458,7 @@ pub fn describe(app: &App) -> Vec<RuleInfo> {
         .collect();
     let fixed = [
         ("Host unreachable", "All hosts", "No report for 90 s", Severity::Critical),
-        ("Services", "Every service", "3 failed runs in a row", Severity::Critical),
+        ("Services", "Every service", "3 failed or degraded runs in a row", Severity::Critical),
         ("Containers", "Docker hosts", "Stopped for 2 min although it should restart, unless stopped by hand", Severity::Critical),
         ("RAID", "mdraid arrays", "Degraded or inactive", Severity::Critical),
         ("SMART", "NVMe drives", "Critical warning set", Severity::Critical),
@@ -564,16 +564,13 @@ mod tests {
         let app = app(false);
         let mut degraded = report("h", "internal", Vec::new());
         degraded.checks = vec![CheckResult { name: "Web".into(), status: CheckStatus::Warning, ..Default::default() }];
-        app.store_report(degraded.clone(), 0);
-        evaluate(&app, 0);
-        assert_eq!(alerts(&app)["h|check|Web"].severity, Severity::Warning);
-        degraded.checks[0].status = CheckStatus::Failed;
-        app.store_report(degraded.clone(), MINUTE);
-        evaluate(&app, MINUTE);
+        for minute in 0..3 {
+            app.store_report(degraded.clone(), minute * MINUTE);
+        }
+        evaluate(&app, 2 * MINUTE);
         let open = &alerts(&app)["h|check|Web"];
-        assert_eq!(open.state, AlertState::Firing);
-        assert_eq!(open.severity, Severity::Warning);
-        app.store_report(degraded.clone(), 2 * MINUTE);
+        assert_eq!((open.state, open.severity), (AlertState::Firing, Severity::Warning));
+        degraded.checks[0].status = CheckStatus::Failed;
         app.store_report(degraded, 3 * MINUTE);
         evaluate(&app, 3 * MINUTE);
         assert_eq!(alerts(&app)["h|check|Web"].severity, Severity::Critical);
@@ -688,6 +685,25 @@ mod tests {
         assert_eq!(all["h|check|Web"].severity, Severity::Critical);
         assert_eq!(all["h|raid|md0"].state, AlertState::Firing);
         assert_eq!(all["h|reboot|"].severity, Severity::Warning);
+    }
+
+    #[test]
+    fn degraded_checks_need_three_runs_in_a_row() {
+        let app = app(false);
+        let check = |status| {
+            let mut report = report("h", "internal", Vec::new());
+            report.checks = vec![CheckResult { name: "Internet".into(), status, ..Default::default() }];
+            report
+        };
+        app.store_report(check(CheckStatus::Warning), 0);
+        app.store_report(check(CheckStatus::Ok), MINUTE);
+        app.store_report(check(CheckStatus::Warning), 2 * MINUTE);
+        evaluate(&app, 2 * MINUTE);
+        assert!(!alerts(&app).contains_key("h|check|Internet"));
+        app.store_report(check(CheckStatus::Warning), 3 * MINUTE);
+        app.store_report(check(CheckStatus::Warning), 4 * MINUTE);
+        evaluate(&app, 4 * MINUTE);
+        assert_eq!(alerts(&app)["h|check|Internet"].severity, Severity::Warning);
     }
 
     #[test]
