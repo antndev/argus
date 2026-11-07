@@ -63,7 +63,7 @@ pub fn ChecksPage() -> impl IntoView {
                 let check = row.check;
                 view! {
                     <tr>
-                        <td><Pill severity=severity/></td>
+                        <td class="status"><Pill severity=severity/></td>
                         <td><span class="check-name">{check.name.clone()}</span><span class="sub mono clip" title=check.target.clone()>{check.target.clone()}</span></td>
                         <td class="hide-sm"><span class="tag">{check.kind.clone()}</span></td>
                         <td>{runs}</td>
@@ -84,7 +84,7 @@ pub fn ChecksPage() -> impl IntoView {
         <Show when=empty>
             <p class="meta">"No services yet."</p>
         </Show>
-        <div class="tbl-wrap stack">
+        <div class="tbl-wrap sheet stack">
             <table>
                 <thead>
                     <tr>

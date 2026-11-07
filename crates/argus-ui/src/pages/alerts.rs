@@ -59,7 +59,7 @@ pub fn AlertsPage() -> impl IntoView {
             <div class="sec-head">
                 <h2>"History"</h2>
                 <Show when=move || !store.events.with(Vec::is_empty)>
-                    <button class="link" type="button" on:click=clear>"Clear"</button>
+                    <button class="btn small" type="button" on:click=clear>"Clear"</button>
                 </Show>
             </div>
             <Show when=move || !store.events.with(Vec::is_empty) fallback=|| view! { <p class="meta">"Nothing happened yet."</p> }>
@@ -71,7 +71,7 @@ pub fn AlertsPage() -> impl IntoView {
         <section>
             <div class="sec-head">
                 <h2>"Rules"</h2>
-                <a class="link" href="#/settings/rules">"Change rules"</a>
+                <a class="btn small" href="#/settings/rules">"Change rules"</a>
             </div>
             <div class="tbl-wrap sheet stack single">
                 <table>
@@ -82,7 +82,7 @@ pub fn AlertsPage() -> impl IntoView {
                         {move || rules.get().into_iter().map(|rule| view! {
                             <tr>
                                 <td><span class="check-name">{rule.name}</span><span class="sub">{format!("{} · {}", rule.scope, label(rule.severity))}</span></td>
-                                <td class="mono">{rule.condition}</td>
+                                <td class="condition">{rule.condition}</td>
                             </tr>
                         }).collect_view()}
                     </tbody>

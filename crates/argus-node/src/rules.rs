@@ -416,6 +416,29 @@ fn reconcile(app: &App, now: i64, conditions: Vec<Condition>, hosts: &HashSet<St
     }
 }
 
+fn metric_text(metric: &str) -> (String, &'static str) {
+    let mut parts = metric.splitn(3, '|');
+    let (group, item, field) = (parts.next().unwrap_or_default(), parts.next().unwrap_or_default(), parts.next().unwrap_or_default());
+    let any = item == "*";
+    let of = |any_text: &str, named: String| if any { any_text.to_string() } else { named };
+    match (group, field) {
+        ("cpu", "iowait") => ("CPU I/O wait".to_string(), "%"),
+        ("cpu", _) => ("CPU".to_string(), "%"),
+        ("memory", "cache") => ("Memory cache".to_string(), "%"),
+        ("memory", _) => ("Memory".to_string(), "%"),
+        ("fs", _) => (of("Any filesystem", format!("Filesystem {item}")), "%"),
+        ("load", minutes) => (format!("Load ({minutes} min)"), ""),
+        ("temp", _) => (of("Any temperature", format!("Temperature {item}")), " °C"),
+        ("smart", "temp") => (of("Any NVMe temperature", format!("NVMe {item} temperature")), " °C"),
+        ("smart", _) => (of("Any NVMe wear", format!("NVMe {item} wear")), "%"),
+        ("net", "rx") => (of("Any network in", format!("Network {item} in")), " Mbit/s"),
+        ("net", _) => (of("Any network out", format!("Network {item} out")), " Mbit/s"),
+        ("docker", "memory") => (of("Any container memory", format!("Container {item} memory")), " MB"),
+        ("docker", _) => (of("Any container CPU", format!("Container {item} CPU")), "%"),
+        _ => (metric.to_string(), ""),
+    }
+}
+
 fn peer_role(config: &Config) -> &'static str {
     if config.initiates_sync() { "External node" } else { "Internal node" }
 }
@@ -440,10 +463,11 @@ pub fn describe(app: &App) -> Vec<RuleInfo> {
         .rules
         .iter()
         .map(|rule| {
+            let (label, unit) = metric_text(&rule.metric);
             let mut condition = match (rule.above, rule.below) {
-                (Some(above), _) => format!("{} above {above}", rule.metric),
-                (_, Some(below)) => format!("{} below {below}", rule.metric),
-                _ => rule.metric.clone(),
+                (Some(above), _) => format!("{label} above {above}{unit}"),
+                (_, Some(below)) => format!("{label} below {below}{unit}"),
+                _ => label,
             };
             if rule.hold.0 > 0 {
                 condition.push_str(&format!(" for {}", duration_text(rule.hold.0)));
@@ -685,6 +709,22 @@ mod tests {
         assert_eq!(all["h|check|Web"].severity, Severity::Critical);
         assert_eq!(all["h|raid|md0"].state, AlertState::Firing);
         assert_eq!(all["h|reboot|"].severity, Severity::Warning);
+    }
+
+    #[test]
+    fn rule_conditions_read_as_sentences() {
+        let conditions: Vec<String> = describe(&app(false)).into_iter().take(5).map(|r| r.condition).collect();
+        assert_eq!(
+            conditions,
+            [
+                "CPU above 85% for 5 min",
+                "Memory above 85% for 5 min",
+                "Any filesystem above 85%",
+                "Load (5 min) above 10 for 20 min",
+                "Any temperature above 80 °C for 5 min"
+            ]
+        );
+        assert_eq!(metric_text("fs|/mnt/raid|used"), ("Filesystem /mnt/raid".to_string(), "%"));
     }
 
     #[test]

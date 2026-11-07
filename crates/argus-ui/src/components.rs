@@ -394,7 +394,7 @@ fn backup_row(store: Store, backup: BackupSchedule, columns: (bool, bool)) -> im
     let added = (!backup.added.is_empty()).then(|| format!("{} added", backup.added));
     view! {
         <tr>
-            <td><Pill severity=severity text=text/></td>
+            <td class="status"><Pill severity=severity text=text/></td>
             <td><span class="check-name">{backup.name.clone()}</span>{(!message.is_empty()).then(|| view! { <span class="sub clip" title=message.clone()>{message.clone()}</span> })}</td>
             <td>{last.map(|t| format::hhmm(t as f64)).unwrap_or_default()}<span class="sub">{move || ago(last)}</span></td>
             <td class="hide-sm">{backup.size.clone()}{added.map(|text| view! { <span class="sub">{text}</span> })}</td>

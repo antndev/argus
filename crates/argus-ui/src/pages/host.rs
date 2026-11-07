@@ -248,7 +248,7 @@ pub fn HostPage(host_id: String) -> impl IntoView {
                         <tbody>
                             {move || checks().into_iter().map(|c| view! {
                                 <tr>
-                                    <td><Pill severity=check_severity(c.status)/></td>
+                                    <td class="status"><Pill severity=check_severity(c.status)/></td>
                                     <td><span class="check-name">{c.name.clone()}</span><span class="sub mono clip" title=c.target.clone()>{c.target.clone()}</span></td>
                                     <td class="hide-sm"><span class="tag">{c.kind.clone()}</span></td>
                                     <td><span class="msg" title=c.message.clone()>{c.message.clone()}</span></td>
@@ -273,7 +273,7 @@ pub fn HostPage(host_id: String) -> impl IntoView {
                                 let (severity, text) = container_state(&c);
                                 view! {
                                     <tr>
-                                        <td><Pill severity=severity text=text/></td>
+                                        <td class="status"><Pill severity=severity text=text/></td>
                                         <td class="mono">{c.name.clone()}</td>
                                         <td class="num hide-sm">{format!("{:.1}%", c.cpu)}</td>
                                         <td class="num">{if c.memory_bytes == 0 && c.state == "running" { "n/a".to_string() } else { format::memory(c.memory_bytes as f64 / 1_048_576.0) }}</td>
