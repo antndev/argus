@@ -81,7 +81,7 @@ pub fn AlertsPage() -> impl IntoView {
                     <tbody>
                         {move || rules.get().into_iter().map(|rule| view! {
                             <tr>
-                                <td><Pill severity=rule.severity/></td>
+                                <td class="quiet"><Pill severity=rule.severity/></td>
                                 <td><span class="check-name">{rule.name}</span><span class="sub">{rule.scope}</span></td>
                                 <td class="mono">{rule.condition}</td>
                             </tr>

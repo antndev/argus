@@ -68,7 +68,7 @@ pub fn rate(value: f64) -> String {
 }
 
 pub fn latency(ms: f64) -> String {
-    if ms < 10.0 { format!("{ms:.1} ms") } else { format!("{} ms", ms.round()) }
+    if ms < 1.0 { format!("{ms:.1} ms") } else { format!("{} ms", ms.round()) }
 }
 
 pub fn memory(megabytes: f64) -> String {
