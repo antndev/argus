@@ -3,7 +3,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::api;
-use crate::components::{AlertList, Pill, sev_icon};
+use crate::components::{AlertList, label, sev_icon};
 use crate::format;
 use crate::store::use_store;
 
@@ -73,16 +73,15 @@ pub fn AlertsPage() -> impl IntoView {
                 <h2>"Rules"</h2>
                 <a class="link" href="#/settings/rules">"Change rules"</a>
             </div>
-            <div class="tbl-wrap sheet stack">
+            <div class="tbl-wrap sheet stack single">
                 <table>
                     <thead>
-                        <tr><th>"Severity"</th><th>"Rule"</th><th>"Condition"</th></tr>
+                        <tr><th>"Rule"</th><th>"Condition"</th></tr>
                     </thead>
                     <tbody>
                         {move || rules.get().into_iter().map(|rule| view! {
                             <tr>
-                                <td class="quiet"><Pill severity=rule.severity/></td>
-                                <td><span class="check-name">{rule.name}</span><span class="sub">{rule.scope}</span></td>
+                                <td><span class="check-name">{rule.name}</span><span class="sub">{format!("{} · {}", rule.scope, label(rule.severity))}</span></td>
                                 <td class="mono">{rule.condition}</td>
                             </tr>
                         }).collect_view()}
