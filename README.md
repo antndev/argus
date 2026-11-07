@@ -230,7 +230,8 @@ starts or changes a backup.
 
 - API. Set `url` and `api_key`. Every `interval` (default 5 minutes) the node asks the API for every schedule, its last
   run and its mirrors. Schedules deleted in ZeroByte disappear from Argus with the next request.
-- Webhook. Every backup run arrives within seconds, with its size. Add a notification destination of type Generic
+- Webhook. Every backup run arrives within seconds, with its size. The overview charts the size of every schedule
+  over the last 30 days. Add a notification destination of type Generic
   Webhook in ZeroByte with method POST, JSON enabled and the keys `title` and `message`, URL
   `https://<node>/api/v1/hooks/zerobyte/<webhook_token>`. Enable start, success, warning and failure on every backup
   schedule and add the node's origin to ZeroByte's `WEBHOOK_ALLOWED_ORIGINS`. The token in the URL authenticates

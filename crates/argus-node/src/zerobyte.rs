@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use argus_model::{BackupMirror, BackupSchedule, BackupState};
+use argus_model::{BACKUP_HOST, BackupMirror, BackupSchedule, BackupState, Sample, metric_key};
 use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -167,6 +167,14 @@ pub async fn webhook(State(app): State<Arc<App>>, Path(token): Path<String>, bod
     };
     let (size, added) = stats(text(&value, &["message", "body", "text"]));
     let now = now_ms();
+    if matches!(kind, Kind::Success | Kind::Warning)
+        && let Some(value) = size.as_deref().and_then(gigabytes)
+    {
+        let sample = Sample { host: BACKUP_HOST.to_string(), key: metric_key("backup", &name, "size"), time: now, value };
+        if let Err(error) = db::insert_samples(&mut app.db(), &[sample]) {
+            log(&format!("storing the size of backup {name} failed: {error}"));
+        }
+    }
     update(&app, &name, |schedule| {
         apply(schedule, kind, now, &detail);
         if matches!(kind, Kind::Success | Kind::Warning) {
@@ -175,6 +183,24 @@ pub async fn webhook(State(app): State<Arc<App>>, Path(token): Path<String>, bod
         }
     });
     StatusCode::NO_CONTENT
+}
+
+fn gigabytes(text: &str) -> Option<f64> {
+    let (number, unit) = text.trim().split_once(' ')?;
+    let value: f64 = number.replace(',', "").parse().ok()?;
+    let factor = match unit.trim() {
+        "B" | "bytes" => 1e-9,
+        "KB" | "kB" => 1e-6,
+        "MB" => 1e-3,
+        "GB" => 1.0,
+        "TB" => 1e3,
+        "KiB" => 1024.0 / 1e9,
+        "MiB" => 1_048_576.0 / 1e9,
+        "GiB" => 1_073_741_824.0 / 1e9,
+        "TiB" => 1_099_511_627_776.0 / 1e9,
+        _ => return None,
+    };
+    Some(value * factor)
 }
 
 fn millis(value: &Value) -> Option<i64> {
@@ -338,6 +364,15 @@ mod tests {
         }
         assert_eq!(parse(&json!({ "subject": "Zerobyte nas started", "body": "" })).map(|p| p.1), Some(Kind::Start));
         assert_eq!(parse(&json!({ "title": "Something else" })), None);
+    }
+
+    #[test]
+    fn backup_sizes_become_gigabytes() {
+        assert_eq!(gigabytes("412 GB"), Some(412.0));
+        assert_eq!(gigabytes("640 MB"), Some(0.64));
+        assert_eq!(gigabytes("1.5 TB"), Some(1500.0));
+        assert!(gigabytes("2 GiB").is_some_and(|v| (v - 2.147).abs() < 0.001));
+        assert_eq!(gigabytes("soon"), None);
     }
 
     #[test]

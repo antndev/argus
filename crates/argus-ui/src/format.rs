@@ -67,6 +67,16 @@ pub fn rate(value: f64) -> String {
     }
 }
 
+pub fn gigabytes(value: f64) -> String {
+    if value >= 1_000.0 {
+        format!("{:.1} TB", value / 1_000.0)
+    } else if value >= 10.0 {
+        format!("{value:.0} GB")
+    } else {
+        format!("{value:.1} GB")
+    }
+}
+
 pub fn latency(ms: f64) -> String {
     if ms < 1.0 { format!("{ms:.1} ms") } else { format!("{} ms", ms.round()) }
 }

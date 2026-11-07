@@ -8,7 +8,7 @@ use crate::{App, db, notify};
 
 pub const STALE: i64 = 90 * SECOND;
 pub const CHECK_FAILURES: u32 = 3;
-pub const BACKUP_HOST: &str = "zerobyte";
+pub use argus_model::BACKUP_HOST;
 
 #[derive(Clone, Debug)]
 pub struct Condition {

@@ -10,6 +10,7 @@ window.argusCharts = (() => {
     deg: (v) => `${v.toFixed(1)} °C`,
     rate: (v) => (v < 1 ? `${Math.round(v * 1000)} kbit/s` : v < 100 ? `${v.toFixed(1)} Mbit/s` : `${Math.round(v)} Mbit/s`),
     load: (v) => v.toFixed(2),
+    gb: (v) => (v >= 1000 ? `${(v / 1000).toFixed(1)} TB` : v >= 10 ? `${Math.round(v)} GB` : `${v.toFixed(1)} GB`),
   };
 
   function niceCeil(value) {
@@ -159,7 +160,8 @@ window.argusCharts = (() => {
           stroke: colors[j % colors.length],
           width: 2,
           fill: spec.series.length === 1 ? `${colors[j % colors.length]}1f` : undefined,
-          points: { show: false },
+          spanGaps: !!spec.sparse,
+          points: { show: !!spec.sparse, size: 5 },
         })),
       ],
       hooks: {

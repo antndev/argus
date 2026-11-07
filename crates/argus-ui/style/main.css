@@ -18,6 +18,7 @@
   --text-3: #87867f;
   --sel: #eae8e0;
   --hover: #eae8e0;
+  --brand: #c96442;
   --accent: #2f63c7;
   --on-accent: #ffffff;
   --accent-tint: #e9eefa;
@@ -65,6 +66,7 @@
     --text-3: #898781;
     --sel: #343434;
     --hover: #232323;
+    --brand: #d97757;
     --accent: #79a6f2;
     --on-accent: #0c1424;
     --accent-tint: #1a2233;
@@ -109,6 +111,7 @@
   --text-3: #898781;
   --sel: #343434;
   --hover: #232323;
+  --brand: #d97757;
   --accent: #79a6f2;
   --on-accent: #0c1424;
   --accent-tint: #1a2233;
@@ -274,7 +277,11 @@ h3 {
   display: inline-flex;
   width: 20px;
   height: 20px;
-  color: var(--accent);
+  color: var(--brand);
+}
+
+.backup-chart {
+  margin-top: 14px;
 }
 
 .logo svg {

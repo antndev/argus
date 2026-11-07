@@ -32,6 +32,7 @@ pub enum Unit {
     Celsius,
     Rate,
     Load,
+    Size,
 }
 
 impl Unit {
@@ -41,6 +42,7 @@ impl Unit {
             Self::Celsius => "deg",
             Self::Rate => "rate",
             Self::Load => "load",
+            Self::Size => "gb",
         }
     }
 
@@ -50,6 +52,7 @@ impl Unit {
             Self::Celsius => format!("{value:.1} °C"),
             Self::Rate => format::rate(value),
             Self::Load => format!("{value:.2}"),
+            Self::Size => format::gigabytes(value),
         }
     }
 }
@@ -62,6 +65,7 @@ pub struct ChartSpec {
     series: Vec<(String, String, f64)>,
     detail: Vec<(String, String, f64)>,
     split: bool,
+    range: Option<Range>,
     max: Option<f64>,
     floor: f64,
     thresholds: Vec<(f64, String)>,
@@ -76,6 +80,7 @@ impl ChartSpec {
             series: Vec::new(),
             detail: Vec::new(),
             split: false,
+            range: None,
             max: None,
             floor: 0.0,
             thresholds: Vec::new(),
@@ -93,6 +98,11 @@ impl ChartSpec {
 
     pub fn split(mut self) -> Self {
         self.split = true;
+        self
+    }
+
+    pub fn range(mut self, range: Range) -> Self {
+        self.range = Some(range);
         self
     }
 
@@ -131,6 +141,7 @@ impl ChartSpec {
             "unit": self.unit.key(),
             "max": self.max,
             "floor": self.floor,
+            "sparse": self.range.is_some(),
             "series": self.series.iter().map(|(label, _, _)| label).collect::<Vec<_>>(),
             "thresholds": thresholds,
         })
@@ -163,7 +174,7 @@ pub fn Chart(spec: ChartSpec) -> impl IntoView {
     let current = Memo::new(move |_| spec.with_value(|s| s.active(detailed.get())));
 
     Effect::new(move |_| {
-        let range = store.range.get();
+        let range = spec.with_value(|s| s.range).unwrap_or_else(|| store.range.get());
         tick.track();
         let Some(element) = node.get() else { return };
         let active = current.get();

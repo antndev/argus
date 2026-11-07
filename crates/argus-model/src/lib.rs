@@ -339,6 +339,7 @@ pub struct Overview {
 
 pub const SERVICE_PREFIX: &str = "service:";
 pub const SERVICES_HOST: &str = "services";
+pub const BACKUP_HOST: &str = "zerobyte";
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
