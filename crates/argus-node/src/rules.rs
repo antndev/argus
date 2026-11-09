@@ -416,6 +416,15 @@ fn reconcile(app: &App, now: i64, conditions: Vec<Condition>, hosts: &HashSet<St
     }
 }
 
+fn reading_unit(snapshots: &[HostSnapshot], rule: &Rule) -> String {
+    snapshots
+        .iter()
+        .filter(|s| matches_hosts(&rule.hosts, &s.report.host.id))
+        .flat_map(|s| &s.report.inventory.readings)
+        .find(|r| !r.unit.is_empty() && glob(&rule.metric, &format!("file|{}|{}", r.item, r.field)))
+        .map_or(String::new(), |r| if r.unit == "%" { "%".to_string() } else { format!(" {}", r.unit) })
+}
+
 fn metric_text(metric: &str) -> (String, &'static str) {
     let mut parts = metric.splitn(3, '|');
     let (group, item, field) = (parts.next().unwrap_or_default(), parts.next().unwrap_or_default(), parts.next().unwrap_or_default());
@@ -459,12 +468,14 @@ pub fn limits(app: &App, host: &str, metrics: &[Metric]) -> Vec<Limit> {
 
 pub fn describe(app: &App) -> Vec<RuleInfo> {
     let config = app.config();
+    let snapshots = app.snapshots();
     let mut rules: Vec<RuleInfo> = config
         .shared
         .rules
         .iter()
         .map(|rule| {
             let (label, unit) = metric_text(&rule.metric);
+            let unit = if unit.is_empty() { reading_unit(&snapshots, rule) } else { unit.to_string() };
             let mut condition = match (rule.above, rule.below) {
                 (Some(above), _) => format!("{label} above {above}{unit}"),
                 (_, Some(below)) => format!("{label} below {below}{unit}"),
@@ -520,7 +531,7 @@ mod tests {
     use super::*;
     use crate::config::{Config, Peer, Span, default_rules};
     use crate::util::MINUTE;
-    use argus_model::{CheckResult, Container, HostInfo, Inventory, Raid, Report};
+    use argus_model::{CheckResult, Container, HostInfo, Inventory, Raid, Reading, Report};
 
     fn config(peer: bool) -> Config {
         let mut config = Config::default();
@@ -727,6 +738,29 @@ mod tests {
         );
         assert_eq!(metric_text("fs|/mnt/raid|used"), ("Filesystem /mnt/raid".to_string(), "%"));
         assert_eq!(metric_text("file|*|dew").0, "Any dew");
+    }
+
+    #[test]
+    fn file_rules_take_the_unit_from_the_reading() {
+        let app = app(false);
+        let mut config = (*app.config()).clone();
+        let rule = |metric: &str, above| Rule {
+            name: metric.into(),
+            metric: metric.into(),
+            hosts: vec!["*".into()],
+            above: Some(above),
+            below: None,
+            hold: Span(0),
+            severity: Severity::Warning,
+        };
+        config.shared.rules = vec![rule("file|enclosure|temperature", 50.0), rule("file|enclosure|humidity", 85.0), rule("file|enclosure|pressure", 900.0)];
+        app.apply_config(config, false).expect("valid");
+        let reading = |field: &str, unit: &str| Reading { item: "enclosure".into(), field: field.into(), label: field.into(), unit: unit.into() };
+        let mut sky = report("sky", "internal", Vec::new());
+        sky.inventory.readings = vec![reading("temperature", "°C"), reading("humidity", "%")];
+        app.store_report(sky, MINUTE);
+        let conditions: Vec<String> = describe(&app).into_iter().take(3).map(|r| r.condition).collect();
+        assert_eq!(conditions, ["enclosure temperature above 50 °C", "enclosure humidity above 85%", "enclosure pressure above 900"]);
     }
 
     #[test]
