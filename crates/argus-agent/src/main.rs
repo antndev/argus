@@ -55,14 +55,14 @@ fn load(path: &str) -> Config {
     Config::load(Path::new(path)).unwrap_or_else(|error| fail(&error))
 }
 
-#[cfg(target_os = "freebsd")]
+#[cfg(any(target_os = "freebsd", target_os = "linux"))]
 fn install(config: &str) {
     platform::install(config);
 }
 
-#[cfg(not(target_os = "freebsd"))]
+#[cfg(not(any(target_os = "freebsd", target_os = "linux")))]
 fn install(_config: &str) {
-    fail("install only sets up the rc.d service on FreeBSD, use the container image or the Home Assistant add-on elsewhere");
+    fail("install sets up the systemd unit on Linux and the rc.d service on FreeBSD");
 }
 
 fn once(config: &Config) {

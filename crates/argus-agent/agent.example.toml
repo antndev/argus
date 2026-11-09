@@ -49,3 +49,13 @@ max_age = "36h"
 name = "Custom"
 type = "exec"
 command = ["/usr/local/bin/something", "--json"]   # stdout {"status":"ok|warning|failed","message":"...","value":1.0}
+
+[[files]]
+path = "/var/lib/sensor/readings.json"   # JSON file on the host, root is added in a container
+item = "outside"                         # the series are file|outside|<field>
+max_age = "5m"                           # optional, an older file reports nothing
+fields = [
+  { path = "AS_TEMP.value", field = "temperature", unit = "°C", label = "Temperature" },
+  { path = "AS_HUMIDITY.value", field = "humidity", unit = "%", label = "Humidity" },
+  { path = "AS_PRESSURE.value", field = "pressure", unit = "hPa", label = "Pressure" },
+]

@@ -118,7 +118,8 @@ argus.external.example.com {
 
 ```sh
 argus-agent run --config /etc/argus/agent.toml
-argus-agent once --config /etc/argus/agent.toml   # print one report as JSON, sends nothing
+argus-agent once --config /etc/argus/agent.toml      # print one report as JSON, sends nothing
+argus-agent install --config /etc/argus/agent.toml   # set it up as a service, systemd on Linux, rc.d on FreeBSD
 ```
 
 `crates/argus-agent/agent.example.toml` documents every option. Besides the checks in its own config the agent runs the http, tcp and ping
@@ -181,6 +182,33 @@ node listens on its `listen` address directly; use `127.0.0.1:8090` when the rev
 Leave `systemd` off in a container. The collector asks the host's D-Bus for failed units, and the default AppArmor
 profile of Docker on Ubuntu blocks that connection. The native binary on a Linux host can use it.
 
+### Linux without Docker
+
+For a host without Docker, such as a small Raspberry Pi, run the static binary as a systemd service. Copy it out of
+the agent image on any machine with Docker, `linux/arm64` for a Raspberry Pi and `linux/amd64` for a PC:
+
+```sh
+docker create --platform linux/arm64 --name argus-linux ghcr.io/antndev/argus-agent:latest none
+docker cp argus-linux:/argus-agent argus-agent-linux-arm64 && docker rm argus-linux
+```
+
+Then as root on the host, with `root = ""` and `agent = "native"` in the config:
+
+```sh
+install -m 755 argus-agent-linux-arm64 /usr/local/bin/argus-agent
+mkdir -p /etc/argus && vi /etc/argus/agent.toml
+argus-agent install --config /etc/argus/agent.toml
+```
+
+`install` writes `/etc/systemd/system/argus-agent.service`, enables it and starts it. Running natively, the agent can
+also ask systemd for failed units: set `systemd = true` under `[collectors]`. To update, replace the binary and run
+`systemctl restart argus-agent`. To remove it:
+
+```sh
+systemctl disable --now argus-agent
+rm /etc/systemd/system/argus-agent.service /usr/local/bin/argus-agent && systemctl daemon-reload
+```
+
 ### FreeBSD and OPNsense
 
 Every push to `main` publishes the binary in the image `ghcr.io/antndev/argus-agent-freebsd`. Copy it out on any
@@ -200,7 +228,35 @@ argus-agent install --config /usr/local/etc/argus/agent.toml
 sysrc argus_agent_enable=YES && service argus_agent start
 ```
 
-On OPNsense the interface descriptions come from `/conf/config.xml` automatically.
+On OPNsense the interface descriptions come from `/conf/config.xml` automatically. To remove the agent:
+
+```sh
+service argus_agent stop && sysrc -x argus_agent_enable
+rm /usr/local/etc/rc.d/argus_agent /usr/local/bin/argus-agent
+```
+
+### Values from a JSON file
+
+Software that already reads a sensor often writes its readings to a JSON file. The agent can chart those values and
+alert on them without any script. Each `[[files]]` entry names the file on the host (the agent adds `root` in a
+container), an `item`, an optional `max_age` and the fields to take. A field's `path` uses the same dotted syntax as
+the JSON assertions of http checks, numbers inside strings are accepted too.
+
+```toml
+[[files]]
+path = "/var/lib/sensor/readings.json"
+item = "outside"
+max_age = "5m"
+fields = [
+  { path = "AS_TEMP.value", field = "temperature", unit = "°C", label = "Temperature" },
+  { path = "AS_HUMIDITY.value", field = "humidity", unit = "%", label = "Humidity" },
+  { path = "AS_PRESSURE.value", field = "pressure", unit = "hPa", label = "Pressure" },
+]
+```
+
+Each field becomes the series `file|<item>|<field>`, here `file|outside|temperature`, with one chart per field on the
+host page and usable in rules like any other metric. When the file is older than `max_age` the agent leaves its values
+out instead of reporting stale ones, so the charts show a gap.
 
 ### Home Assistant
 
@@ -241,7 +297,7 @@ starts or changes a backup.
 ## Images
 
 Every push to `main` runs the tests and publishes `ghcr.io/antndev/argus-node` (amd64), `ghcr.io/antndev/argus-agent`
-(amd64, arm64) and `ghcr.io/antndev/argus-agent-freebsd`, each tagged `latest`, with the version from `Cargo.toml`
+(amd64, arm64, its static binary also runs without Docker) and `ghcr.io/antndev/argus-agent-freebsd`, each tagged `latest`, with the version from `Cargo.toml`
 and with the commit. The Home Assistant add-on pulls the version tag.
 
 ## Development

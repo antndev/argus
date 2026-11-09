@@ -39,6 +39,28 @@ fn read(path: &str) -> Option<String> {
     fs::read_to_string(path).ok()
 }
 
+const UNIT_PATH: &str = "/etc/systemd/system/argus-agent.service";
+
+pub fn install(config: &str) {
+    let binary = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_else(|_| "/usr/local/bin/argus-agent".into());
+    let config = std::path::absolute(config).map(|p| p.display().to_string()).unwrap_or_else(|_| config.into());
+    let fail = |message: String| -> ! {
+        eprintln!("{message}");
+        std::process::exit(1);
+    };
+    if let Err(error) = fs::write(UNIT_PATH, linux_parse::systemd_unit(&binary, &config)) {
+        fail(format!("cannot write {UNIT_PATH}: {error}"));
+    }
+    for arguments in [&["daemon-reload"][..], &["enable", "--now", "argus-agent.service"]] {
+        match Command::new("systemctl").args(arguments).status() {
+            Ok(status) if status.success() => {}
+            Ok(status) => fail(format!("systemctl {} failed with {status}", arguments.join(" "))),
+            Err(error) => fail(format!("cannot run systemctl: {error}")),
+        }
+    }
+    println!("Wrote {UNIT_PATH}, enabled and started argus-agent.service");
+}
+
 pub fn cpu_times() -> Option<CpuTimes> {
     linux_parse::cpu_times(&read("/proc/stat")?)
 }

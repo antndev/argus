@@ -27,6 +27,29 @@ pub struct Config {
     pub collectors: Collectors,
     #[serde(default)]
     pub checks: Vec<Check>,
+    #[serde(default)]
+    pub files: Vec<FileSource>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileSource {
+    pub path: String,
+    pub item: String,
+    #[serde(default, deserialize_with = "optional_duration")]
+    pub max_age: Option<Duration>,
+    pub fields: Vec<FileField>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileField {
+    pub path: String,
+    pub field: String,
+    #[serde(default)]
+    pub unit: String,
+    #[serde(default)]
+    pub label: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -84,6 +107,26 @@ impl Config {
         if let Some(check) = config.checks.iter().find(|c| c.name.contains(',')) {
             return Err(format!("check {:?} has a comma in its name", check.name));
         }
+        let mut seen = std::collections::HashSet::new();
+        for source in &config.files {
+            if !metric_name(&source.item) {
+                return Err(format!("file {:?} needs an item without | or commas", source.path));
+            }
+            if source.fields.is_empty() {
+                return Err(format!("file {:?} needs at least one field", source.path));
+            }
+            if source.max_age.is_some_and(|age| age < Duration::from_secs(1)) {
+                return Err(format!("file {:?} needs a max_age of at least 1 s", source.path));
+            }
+            for field in &source.fields {
+                if !metric_name(&field.field) || field.path.is_empty() {
+                    return Err(format!("file {:?} has a field without a name or path", source.path));
+                }
+                if !seen.insert((source.item.as_str(), field.field.as_str())) {
+                    return Err(format!("{}|{} is read twice", source.item, field.field));
+                }
+            }
+        }
         for check in &config.checks {
             let Some(timeout) = check.kind.timeout() else {
                 continue;
@@ -112,6 +155,14 @@ impl Node {
         }
         Ok(token)
     }
+}
+
+fn metric_name(name: &str) -> bool {
+    !name.trim().is_empty() && !name.contains(['|', ','])
+}
+
+fn optional_duration<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Duration>, D::Error> {
+    argus_model::duration::deserialize(deserializer).map(Some)
 }
 
 fn internal() -> String {
@@ -186,6 +237,12 @@ mod tests {
         assert!(Config::parse("site = \"home\"\n[[checks]]\nname = \"x\"\ntype = \"smtp\"").is_err());
         assert!(Config::parse("site = \"home\"\n[[checks]]\nname = \"x\"\ntype = \"exec\"\ncommand = []").is_err());
         assert!(Config::parse("site = \"home\"\n[[checks]]\nname = \"x\"\ntype = \"file_age\"\npath = \"/x\"\nmax_age = \"soon\"").is_err());
+        let file = |item: &str, fields: &str| Config::parse(&format!("[[files]]\npath = \"/x.json\"\nitem = \"{item}\"\nfields = [{fields}]"));
+        assert!(file("sky", r#"{ path = "a", field = "t" }"#).is_ok());
+        assert!(file("sky|x", r#"{ path = "a", field = "t" }"#).is_err());
+        assert!(file("sky", "").is_err());
+        assert!(file("sky", r#"{ path = "a", field = "t" }, { path = "b", field = "t" }"#).is_err());
+        assert!(file("sky", r#"{ path = "a", field = "t", colour = "red" }"#).is_err());
     }
 
     #[test]

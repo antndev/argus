@@ -33,6 +33,7 @@ pub enum Unit {
     Rate,
     Load,
     Size,
+    Plain,
 }
 
 impl Unit {
@@ -43,6 +44,7 @@ impl Unit {
             Self::Rate => "rate",
             Self::Load => "load",
             Self::Size => "gb",
+            Self::Plain => "plain",
         }
     }
 
@@ -53,6 +55,7 @@ impl Unit {
             Self::Rate => format::rate(value),
             Self::Load => format!("{value:.2}"),
             Self::Size => format::gigabytes(value),
+            Self::Plain => format!("{value:.1}"),
         }
     }
 }
@@ -66,6 +69,7 @@ pub struct ChartSpec {
     detail: Vec<(String, String, f64)>,
     split: bool,
     range: Option<Range>,
+    suffix: String,
     max: Option<f64>,
     floor: f64,
     thresholds: Vec<(f64, String)>,
@@ -81,6 +85,7 @@ impl ChartSpec {
             detail: Vec::new(),
             split: false,
             range: None,
+            suffix: String::new(),
             max: None,
             floor: 0.0,
             thresholds: Vec::new(),
@@ -104,6 +109,18 @@ impl ChartSpec {
     pub fn range(mut self, range: Range) -> Self {
         self.range = Some(range);
         self
+    }
+
+    pub fn suffix(mut self, suffix: &str) -> Self {
+        self.suffix = suffix.to_string();
+        self
+    }
+
+    fn text(&self, value: f64) -> String {
+        match (self.unit, self.suffix.is_empty()) {
+            (Unit::Plain, false) => format!("{value:.1} {}", self.suffix),
+            (unit, _) => unit.format(value),
+        }
     }
 
     pub fn detail(mut self, label: &str, key: String, factor: f64) -> Self {
@@ -142,6 +159,7 @@ impl ChartSpec {
             "max": self.max,
             "floor": self.floor,
             "sparse": self.range.is_some(),
+            "suffix": self.suffix,
             "series": self.series.iter().map(|(label, _, _)| label).collect::<Vec<_>>(),
             "thresholds": thresholds,
         })
@@ -164,7 +182,6 @@ pub fn Chart(spec: ChartSpec) -> impl IntoView {
     let latest = RwSignal::new(Vec::<Option<f64>>::new());
     let shown = RwSignal::new(Vec::<bool>::new());
     let tick = Memo::new(move |_| (store.clock.get() / 30_000.0).floor() as i64);
-    let unit = spec.unit;
     let title = spec.title.clone();
     let splits = spec.split;
     let empty = spec.detail.is_empty();
@@ -232,7 +249,7 @@ pub fn Chart(spec: ChartSpec) -> impl IntoView {
             .into_iter()
             .enumerate()
             .map(|(index, (label, _, _))| {
-                let value = move || latest.with(|v| v.get(index).copied().flatten().map(|x| unit.format(x)).unwrap_or_default());
+                let value = move || latest.with(|v| v.get(index).copied().flatten().map(|x| spec.with_value(|s| s.text(x))).unwrap_or_default());
                 let off = move || shown.with(|s| s.get(index).is_some_and(|show| !show));
                 let pick = move |_| {
                     if let Some(id) = handle.get_value()

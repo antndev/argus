@@ -175,9 +175,22 @@ pub fn smart_log(device: &str, log: &[u8; 512]) -> Smart {
     }
 }
 
+pub fn systemd_unit(binary: &str, config: &str) -> String {
+    format!(
+        "[Unit]\nDescription=Argus agent\nWants=network-online.target\nAfter=network-online.target\n\n[Service]\nExecStart=\"{binary}\" run --config \"{config}\"\nRestart=always\nRestartSec=10\n\n[Install]\nWantedBy=multi-user.target\n"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn systemd_unit_runs_the_agent_with_its_config() {
+        let unit = systemd_unit("/usr/local/bin/argus-agent", "/etc/argus/agent.toml");
+        assert!(unit.contains("ExecStart=\"/usr/local/bin/argus-agent\" run --config \"/etc/argus/agent.toml\"\n"));
+        assert!(unit.contains("Restart=always") && unit.ends_with("WantedBy=multi-user.target\n"));
+    }
 
     #[test]
     fn proc_stat() {

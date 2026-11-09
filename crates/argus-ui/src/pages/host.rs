@@ -77,6 +77,14 @@ fn chart_specs(host: &HostSummary) -> Vec<ChartSpec> {
     for (name, label) in interfaces(host) {
         specs.push(ChartSpec::new(id, &format!("Network {label}"), Unit::Rate).series("In", key("net", &name, "rx")).series("Out", key("net", &name, "tx")));
     }
+    for reading in &host.inventory.readings {
+        let unit = match reading.unit.as_str() {
+            "°C" => Unit::Celsius,
+            "%" => Unit::Percent,
+            _ => Unit::Plain,
+        };
+        specs.push(ChartSpec::new(id, &reading.label, unit).suffix(&reading.unit).series(&reading.label, key("file", &reading.item, &reading.field)));
+    }
     specs
 }
 

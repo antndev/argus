@@ -23,6 +23,10 @@ window.argusCharts = (() => {
 
   function yRange(spec, low, high) {
     if (spec.max != null) return [0, spec.max];
+    if (spec.unit === "plain" && high > low) {
+      const pad = Math.max((high - low) * 0.2, Math.abs(high) * 0.005);
+      return [Math.floor(low - pad), Math.ceil(high + pad)];
+    }
     let max = Math.max(high * 1.15, spec.floor || 0);
     for (const t of spec.thresholds) max = Math.max(max, t.v * 1.06);
     const min = spec.unit === "deg" ? Math.max(0, Math.floor((low - 8) / 10) * 10) : 0;
@@ -85,7 +89,7 @@ window.argusCharts = (() => {
 
   function tooltip(spec, colors) {
     let tip;
-    const format = formats[spec.unit] || formats.load;
+    const format = spec.unit === "plain" ? (v) => `${v.toFixed(1)} ${spec.suffix || ""}`.trim() : formats[spec.unit] || formats.load;
     return {
       hooks: {
         init: (u) => {

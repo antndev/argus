@@ -143,7 +143,7 @@ fn body_failure(body: &str, contains: Option<&str>, json: &[JsonAssertion]) -> O
     })
 }
 
-fn lookup<'a>(document: &'a Value, path: &str) -> Option<&'a Value> {
+pub fn lookup<'a>(document: &'a Value, path: &str) -> Option<&'a Value> {
     path.split('.').try_fold(document, |value, key| match value {
         Value::Array(items) => items.get(key.parse::<usize>().ok()?),
         _ => value.get(key),

@@ -2,9 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Instant;
 
-use argus_model::{Filesystem, HostInfo, Interface, Inventory, Metric, Sensor};
+use argus_model::{Filesystem, HostInfo, Interface, Inventory, Metric, Reading, Sensor};
+use serde_json::Value;
 
-use crate::config::Config;
+use crate::config::{Config, FileSource};
 use crate::docker::Docker;
 use crate::{log, platform};
 
@@ -141,6 +142,27 @@ impl Collector {
             }
         }
 
+        for source in &config.files {
+            match read_file(root, source) {
+                Ok(Some(document)) => {
+                    for field in &source.fields {
+                        match crate::checks::lookup(&document, &field.path).and_then(number) {
+                            Some(value) => metrics.push(Metric::new("file", &source.item, &field.field, value)),
+                            None => self.warn_once(format!("{}: no number at {}", source.path, field.path)),
+                        }
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => self.warn_once(format!("{}: {error}", source.path)),
+            }
+            inventory.readings.extend(source.fields.iter().map(|field| Reading {
+                item: source.item.clone(),
+                field: field.field.clone(),
+                label: if field.label.is_empty() { field.field.clone() } else { field.label.clone() },
+                unit: field.unit.clone(),
+            }));
+        }
+
         if collectors.systemd {
             match platform::failed_units(root) {
                 Ok(units) => inventory.failed_units = Some(units),
@@ -186,6 +208,25 @@ impl Collector {
             log(&message);
         }
     }
+}
+
+const MAX_FILE: u64 = 1024 * 1024;
+
+fn read_file(root: &str, source: &FileSource) -> Result<Option<Value>, String> {
+    use std::io::Read;
+    let path = format!("{root}{}", source.path);
+    let file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
+    let modified = file.metadata().and_then(|m| m.modified()).map_err(|e| e.to_string())?;
+    if source.max_age.is_some_and(|max| modified.elapsed().unwrap_or_default() > max) {
+        return Ok(None);
+    }
+    let mut text = String::new();
+    file.take(MAX_FILE).read_to_string(&mut text).map_err(|e| e.to_string())?;
+    serde_json::from_str(&text).map(Some).map_err(|e| format!("not JSON, {e}"))
+}
+
+fn number(value: &Value) -> Option<f64> {
+    value.as_f64().or_else(|| value.as_str()?.trim().parse().ok()).filter(|v: &f64| v.is_finite())
 }
 
 pub fn cpu_percent(previous: CpuTimes, current: CpuTimes) -> Option<(f64, f64)> {
@@ -285,6 +326,41 @@ fn fs_usage(_path: &str) -> Option<(u64, u64, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json_files_become_metrics_and_stale_files_are_dropped() {
+        let dir = std::env::temp_dir().join(format!("argus-files-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("data")).expect("dir");
+        let file = dir.join("data/sky.json");
+        std::fs::write(&file, r#"{"AS_TEMP": {"value": 20.05, "type": "temperature"}, "AS_HUMIDITY": {"value": "35.96"}, "AS_DEW": {"value": null}}"#)
+            .expect("file");
+        let text = r#"
+            [[files]]
+            path = "/data/sky.json"
+            item = "sky"
+            max_age = "5m"
+            fields = [
+              { path = "AS_TEMP.value", field = "temperature", unit = "°C", label = "Temperature" },
+              { path = "AS_HUMIDITY.value", field = "humidity", unit = "%" },
+              { path = "AS_DEW.value", field = "dew" },
+            ]
+        "#;
+        let config = Config { root: dir.display().to_string(), ..Config::parse(text).expect("config") };
+        let mut collector = Collector::new();
+        let (_, metrics, inventory) = collector.collect(&config);
+        let read: Vec<(String, f64)> = metrics.iter().filter(|m| m.group == "file").map(|m| (m.key(), m.value)).collect();
+        assert_eq!(read, [("file|sky|temperature".to_string(), 20.05), ("file|sky|humidity".to_string(), 35.96)]);
+        assert_eq!(
+            inventory.readings.iter().map(|r| (r.label.as_str(), r.unit.as_str())).collect::<Vec<_>>(),
+            [("Temperature", "°C"), ("humidity", "%"), ("dew", "")]
+        );
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(600);
+        std::fs::File::options().write(true).open(&file).and_then(|f| f.set_modified(old)).expect("age");
+        let (_, metrics, inventory) = collector.collect(&config);
+        assert!(!metrics.iter().any(|m| m.group == "file"));
+        assert_eq!(inventory.readings.len(), 3);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     fn mount(device: &str, mount: &str, fstype: &str) -> Mount {
         Mount { device: device.into(), mount: mount.into(), fstype: fstype.into() }

@@ -66,6 +66,17 @@ pub struct Inventory {
     pub smart: Vec<Smart>,
     pub failed_units: Option<Vec<String>>,
     pub reboot_required: Option<bool>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub readings: Vec<Reading>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Reading {
+    pub item: String,
+    pub field: String,
+    pub label: String,
+    pub unit: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

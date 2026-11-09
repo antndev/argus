@@ -435,6 +435,7 @@ fn metric_text(metric: &str) -> (String, &'static str) {
         ("net", _) => (of("Any network out", format!("Network {item} out")), " Mbit/s"),
         ("docker", "memory") => (of("Any container memory", format!("Container {item} memory")), " MB"),
         ("docker", _) => (of("Any container CPU", format!("Container {item} CPU")), "%"),
+        ("file", field) => (format!("{item} {field}"), ""),
         _ => (metric.to_string(), ""),
     }
 }
