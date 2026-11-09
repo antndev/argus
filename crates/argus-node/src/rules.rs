@@ -435,7 +435,7 @@ fn metric_text(metric: &str) -> (String, &'static str) {
         ("net", _) => (of("Any network out", format!("Network {item} out")), " Mbit/s"),
         ("docker", "memory") => (of("Any container memory", format!("Container {item} memory")), " MB"),
         ("docker", _) => (of("Any container CPU", format!("Container {item} CPU")), "%"),
-        ("file", field) => (format!("{item} {field}"), ""),
+        ("file", field) => (of(&format!("Any {field}"), format!("{item} {field}")), ""),
         _ => (metric.to_string(), ""),
     }
 }
@@ -726,6 +726,7 @@ mod tests {
             ]
         );
         assert_eq!(metric_text("fs|/mnt/raid|used"), ("Filesystem /mnt/raid".to_string(), "%"));
+        assert_eq!(metric_text("file|*|dew").0, "Any dew");
     }
 
     #[test]
