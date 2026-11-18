@@ -416,7 +416,7 @@ pub fn BackupTable() -> impl IntoView {
     view! {
         <Show
             when=move || !empty()
-            fallback=|| view! { <p class="meta">"No backup data yet. Set the ZeroByte API address and key under Settings, ZeroByte integration."</p> }
+            fallback=|| view! { <p class="meta">"No backup data yet. Set up the ZeroByte integration in Settings."</p> }
         >
             <div class="tbl-wrap sheet stack">
                 <table>

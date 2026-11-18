@@ -228,7 +228,7 @@ pub fn HostPage(host_id: String) -> impl IntoView {
             <Show when=move || !waiting()>{segmented(store.range, Range::OPTIONS, "Time range")}</Show>
         </div>
         <Show when=move || store.loaded() && waiting()>
-            <p class="empty-note">"No report yet. Install the agent on this host with its token from Settings, Hosts and agents, it shows up here within 30 seconds."</p>
+            <p class="empty-note">"No report yet. Install the agent with its token from Settings, Hosts and agents."</p>
         </Show>
         <Show when=move || !waiting()>
         <Show when=alerting>

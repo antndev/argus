@@ -406,12 +406,12 @@ fn group(title: &'static str) -> impl IntoView {
 fn general(store: Store) -> impl IntoView {
     let path = move || store.saved.with(|s| s.as_ref().and_then(|s| s.path.clone())).unwrap_or_else(|| "Not saved to a file".to_string());
     view! {
-        <p class="lead">"Changes save on their own. The config file stays in sync, edits there apply within seconds."</p>
+        <p class="lead">"Changes save automatically. Edits to the config file apply within seconds."</p>
         {row("Listen address", "Takes effect after a restart.", text_input(store, "/listen".into(), "0.0.0.0:8090", false))}
         {row("Database", "Takes effect after a restart.", text_input(store, "/database".into(), "argus.db", false))}
         {row(
             "Connections",
-            "Persistent keeps a connection open from every agent to each node and between the nodes, so the nodes pass on every change at once. A lost connection is rebuilt on its own, meanwhile everything goes by request.",
+            "Persistent keeps live connections to the agents and between the nodes.",
             select_input(store, "/shared/connection".into(), &[("interval", "Interval"), ("persistent", "Persistent")]),
         )}
         {row("Config file", "", view! { <span class="mono value">{path}</span> })}
@@ -484,14 +484,14 @@ fn agents(store: Store) -> impl IntoView {
                             <span class="ico" inner_html=icons::COPY></span>"Copy"
                         </button>
                     </div>
-                    <p>"Shown once. Put it into the agent config, and add the second node under [[nodes]] too if you run one."</p>
+                    <p>"Shown once. Put it into the agent config."</p>
                     <pre class="code">{config}</pre>
                 </div>
             }
         })
     };
     view! {
-        <p class="lead">"Every agent sends its reports with its own token. The node only keeps the sha256 of each token."</p>
+        <p class="lead">"Each agent reports with its own token. The node stores only its hash."</p>
         <div class="add-row">
             <input class="input" type="text" spellcheck="false" placeholder="Host id, for example nas" prop:value=move || new_id.get() on:input=move |ev| new_id.set(event_target_value(&ev)) on:keydown=move |ev| if ev.key() == "Enter" { add(()) }/>
             <button class="btn" type="button" on:click=move |_| add(())><span class="ico" inner_html=icons::PLUS></span>"Add host"</button>
@@ -501,7 +501,7 @@ fn agents(store: Store) -> impl IntoView {
             <For each=move || ids.get() key=|id| id.clone() children=item/>
         </ul>
         <Show when=move || ids.with(Vec::is_empty)>
-            <p class="empty-note">"No agents yet. Reports from unknown tokens are rejected."</p>
+            <p class="empty-note">"No agents yet."</p>
         </Show>
     }
 }
@@ -599,7 +599,7 @@ fn checks(store: Store) -> impl IntoView {
         }
     };
     view! {
-        <p class="lead">"HTTP, TCP and ping checks are sent to the agent that runs them with its next report. A standalone service belongs to no host, like a camera without an agent: any home agent runs it unless you pick one, and it shows and alerts on its own. Commands and file checks stay in the agent's own config, the node can never start a program on a host."</p>
+        <p class="lead">"HTTP, TCP and ping checks run on an agent. Standalone services belong to no host. Command and file checks stay in the agent config."</p>
         <Show when=move || hosts.with(|h| !h.is_empty()) fallback=|| view! { <p class="empty-note">"Add a host under Hosts and agents first."</p> }>
             <div class="add-row">
                 <select class="input" aria-label="Where the service belongs" prop:value=move || chosen.get() on:change=move |ev| chosen.set(event_target_value(&ev))>
@@ -694,7 +694,7 @@ fn rules(store: Store) -> impl IntoView {
         write(store, "/shared/rules", Some(Value::Array(list)));
     };
     view! {
-        <p class="lead">"Metrics are group|item|field, * matches anything. Hosts take patterns and !exclusions. Unreachable hosts, failing services, stopped containers, RAID, SMART, systemd and reboots always alert."</p>
+        <p class="lead">"Use * as a wildcard and !host to exclude a host. Built-in rules always apply, the Alerts page lists them."</p>
         <datalist id="metrics">{METRICS.iter().map(|m| view! { <option value=*m></option> }).collect_view()}</datalist>
         <div class="add-row">
             <button class="btn" type="button" on:click=add><span class="ico" inner_html=icons::PLUS></span>"Add rule"</button>
@@ -804,13 +804,13 @@ fn notifications(store: Store) -> impl IntoView {
         }
     };
     view! {
-        <p class="lead">"Argus encrypts every notification and hands it straight to the push service of your phone, Apple on an iPhone. It only sees encrypted data, the phone decrypts, shows the text and confirms receipt."</p>
-        {row("Phone notifications", "Shared by both nodes, either one can notify.", switch(store, "/shared/push", push_template))}
+        <p class="lead">"Alerts arrive on your phone as end-to-end encrypted push notifications."</p>
+        {row("Phone notifications", "Sent by either node.", switch(store, "/shared/push", push_template))}
         <Show when=enabled>
-            {row("Contact", "Apple asks every sender for a mailto: or https:// address.", text_input(store, "/shared/push/subject".into(), "mailto:you@example.com", false))}
-            {row("Confirmation addresses", "Where the phone confirms receipt, this dashboard and the node that is reachable from outside.", list_input(store, "/shared/push/receipt_urls".into(), "https://argus.internal.example.com", None))}
-            {row("Status message", "A short daily all clear proves the path works. Empty turns it off.", span_input(store, "/shared/push/status_every".into(), true))}
-            {row("This device", "Run once per phone, from the installed Argus app.", this_device(store))}
+            {row("Contact", "A mailto: or https:// address, required by Apple.", text_input(store, "/shared/push/subject".into(), "mailto:you@example.com", false))}
+            {row("Confirmation addresses", "Where the phone confirms delivery.", list_input(store, "/shared/push/receipt_urls".into(), "https://argus.internal.example.com", None))}
+            {row("Status message", "A daily all clear. Leave empty to turn it off.", span_input(store, "/shared/push/status_every".into(), true))}
+            {row("This device", "Open Argus from the home screen first.", this_device(store))}
             {group("Devices")}
             <ul class="entries">
                 <For each=move || 0..devices.get() key=|i| *i children=device/>
@@ -838,19 +838,19 @@ fn peer(store: Store) -> impl IntoView {
         write(store, "/peer/url", to_internal.then_some(address));
     };
     view! {
-        <p class="lead">"Two nodes watch each other. The internal node starts every sync, so nothing ever connects into your network. After 60 s without sync each node takes over the hosts it still hears from."</p>
-        {row("Two nodes", "Turn off to run a single node.", switch(store, "/peer", || json!({ "url": "", "token": "" })))}
+        <p class="lead">"Two nodes watch each other. The internal node starts every sync, so nothing connects into your network."</p>
+        {row("Two nodes", "", switch(store, "/peer", || json!({ "url": "", "token": "" })))}
         <Show when=enabled>
-            {row("This node", "The internal node runs at home, the external one is reachable from the internet.", view! {
+            {row("This node", "Internal runs at home, external on the internet.", view! {
                 <select class="input" prop:value=move || if internal() { "internal" } else { "external" } on:change=role>
                     <option value="internal">"Internal"</option>
                     <option value="external">"External"</option>
                 </select>
             })}
             <Show when=internal>
-                {row("Address", "Where this node reaches the external node.", text_input(store, "/peer/url".into(), "https://argus.external.example.com", false))}
+                {row("Address", "", text_input(store, "/peer/url".into(), "https://argus.external.example.com", false))}
             </Show>
-            {row("Sync token", "The same secret on both nodes, at least 16 characters.", token_input(store, "/peer/token".into(), false, RwSignal::new(None)))}
+            {row("Sync token", "Same on both nodes, at least 16 characters.", token_input(store, "/peer/token".into(), false, RwSignal::new(None)))}
         </Show>
     }
 }
@@ -873,17 +873,17 @@ fn backups(store: Store) -> impl IntoView {
         (token, _) => format!("{}/api/v1/hooks/zerobyte/{token}", origin()),
     };
     view! {
-        <p class="lead">"Argus reads every backup schedule and its mirrors from the ZeroByte API and receives every backup run from a ZeroByte webhook within seconds. It alerts when a backup or mirror fails or no success arrived in time. Schedules deleted in ZeroByte disappear here on their own. Argus only reads and receives, it never starts or changes a backup."</p>
+        <p class="lead">"Argus reads backups from the ZeroByte API and gets every run from its webhook. It never changes a backup."</p>
         {row("ZeroByte integration", "Show backups and alert on problems.", switch(store, "/zerobyte", || json!({ "interval": "5m" })))}
         <Show when=enabled>
             {group("API")}
-            {row("API address", "Where this node reaches ZeroByte.", text_input(store, "/zerobyte/url".into(), "http://zerobyte.example.com:4096", false))}
-            {row("API key", "ZeroByte keys can also delete backups, keep this node private.", password_input(store, "/zerobyte/api_key".into()))}
+            {row("API address", "", text_input(store, "/zerobyte/url".into(), "http://zerobyte.example.com:4096", false))}
+            {row("API key", "It can also delete backups, keep this node private.", password_input(store, "/zerobyte/api_key".into()))}
             {row("Ask every", "", span_input(store, "/zerobyte/interval".into(), false))}
             {group("Webhook")}
             {row("Webhook token", view! { <span class="mono">{hook}</span> }, token_input(store, "/zerobyte/webhook_token".into(), false, fresh))}
         </Show>
-        {row("Alert after", "Alert when a backup or mirror fails or no success arrived for this long.", span_input(store, "/shared/backup_max_age".into(), false))}
+        {row("Alert after", "When no backup succeeded for this long.", span_input(store, "/shared/backup_max_age".into(), false))}
     }
 }
 
@@ -913,7 +913,7 @@ fn keep(store: Store, label: &'static str, sub: &'static str, level: &'static st
 
 fn retention(store: Store) -> impl IntoView {
     view! {
-        <p class="lead">"Older data is averaged into coarser points, so long time ranges stay small and fast. Each level keeps its points for the given number of days."</p>
+        <p class="lead">"Older data is averaged into coarser points."</p>
         <div class="card plain">
             <div class="card-grid">
                 {keep(store, "Keep every report", "Days with full detail.", "raw")}
@@ -1071,10 +1071,10 @@ fn two_factor(store: Store) -> impl IntoView {
     let details = move || match (enrollment.get(), disabling.get()) {
         (Some(found), _) => view! {
             <form on:submit=confirm("/api/v1/totp/enable", "TOTP is on")>
-                {row("QR code", "For example 1Password, Bitwarden or Passwords on the iPhone.", view! {
+                {row("QR code", "With any authenticator app.", view! {
                     <div class="qr" role="img" aria-label="QR code with the TOTP secret" inner_html=found.qr.unwrap_or_default()></div>
                 })}
-                {row("Setup key", "If you cannot scan the code.", view! { <code class="code key">{grouped(&found.secret)}</code> })}
+                {row("Setup key", "To enter it by hand.", view! { <code class="code key">{grouped(&found.secret)}</code> })}
                 {credentials()}
                 {actions("Turn on")}
             </form>
@@ -1090,10 +1090,10 @@ fn two_factor(store: Store) -> impl IntoView {
         _ => form_actions(error, ()).into_any(),
     };
     let sub = move || match state() {
-        (_, true, _) => "Scan the QR code with an authenticator app, then confirm with your password and a code.",
-        (true, _, true) => "Confirm with your password and a code to turn it off.",
-        (true, _, _) => "Sign-in asks for a code from your authenticator app.",
-        _ => "Ask for a code from an authenticator app at sign-in.",
+        (_, true, _) => "Scan the QR code, then confirm.",
+        (true, _, true) => "Confirm to turn it off.",
+        (true, _, _) => "Sign-in asks for a code.",
+        _ => "Ask for a code at sign-in.",
     };
     let checked = move || match state() {
         (_, true, _) => true,
@@ -1115,8 +1115,8 @@ fn security(store: Store) -> impl IntoView {
     store.check_session();
     let follower = move || read(store, "/peer").is_some() && read(store, "/peer/url").is_none();
     view! {
-        <p class="lead">"Applies to both nodes. If you are locked out, run argus-node reset-password on the internal node, it removes the password and TOTP."</p>
-        <Show when=move || !follower() fallback=|| view! { <p class="empty-note">"Change these on the internal node, they reach this node with the next sync."</p> }>
+        <p class="lead">"Applies to both nodes. If you are locked out, run argus-node reset-password on the internal node."</p>
+        <Show when=move || !follower() fallback=|| view! { <p class="empty-note">"Change these on the internal node."</p> }>
             {password_change(store)}
             {two_factor(store)}
         </Show>
@@ -1141,7 +1141,7 @@ fn json_editor(store: Store) -> impl IntoView {
         Err(problem) => error.set(problem.to_string()),
     };
     view! {
-        <p class="lead">"The whole configuration as stored in the file. Secrets show as ******** and keep their stored value."</p>
+        <p class="lead">"Secrets show as ******** and keep their stored value."</p>
         <textarea class="input code-edit" spellcheck="false" prop:value=move || draft.get() on:input=move |ev| draft.set(event_target_value(&ev))></textarea>
         <p class="form-error" role="alert">{move || error.get()}</p>
         <div class="add-row">

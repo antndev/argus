@@ -428,7 +428,7 @@ h3 {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 24px 28px 48px;
+  padding: 16px 28px 48px;
 }
 
 .seg {
@@ -1667,7 +1667,7 @@ td .sev {
 .split-detail {
   flex: 1;
   min-width: 0;
-  padding: 24px 28px 48px;
+  padding: 16px 28px 48px;
   overflow: auto;
 }
 
@@ -2445,7 +2445,7 @@ li[data-host]:has(> .list-item[aria-current="page"]) {
 
   .split-detail {
     display: none;
-    padding: 24px 16px 32px;
+    padding: 28px 16px 32px;
   }
 
   .split.has-detail > .split-list {
@@ -2466,7 +2466,7 @@ li[data-host]:has(> .list-item[aria-current="page"]) {
 
   .cat {
     height: 46px;
-    padding: 0 4px;
+    padding: 0;
     border-radius: 0;
     border-bottom: 1px solid var(--line-soft);
     -webkit-tap-highlight-color: transparent;
