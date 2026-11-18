@@ -8,6 +8,7 @@ use serde::de::DeserializeOwned;
 pub struct Failure {
     pub status: u16,
     pub text: String,
+    pub retry: u32,
 }
 
 impl fmt::Display for Failure {
@@ -17,7 +18,7 @@ impl fmt::Display for Failure {
 }
 
 fn failure(text: impl ToString) -> Failure {
-    Failure { status: 0, text: text.to_string() }
+    Failure { status: 0, text: text.to_string(), retry: 0 }
 }
 
 async fn checked(response: Result<Response, gloo_net::Error>) -> Result<Response, Failure> {
@@ -26,8 +27,9 @@ async fn checked(response: Result<Response, gloo_net::Error>) -> Result<Response
         return Ok(response);
     }
     let status = response.status();
+    let retry = response.headers().get("retry-after").and_then(|v| v.trim().parse().ok()).unwrap_or(0);
     let text = response.text().await.unwrap_or_default();
-    Err(Failure { status, text: if text.is_empty() { format!("{status} {}", response.status_text()) } else { text } })
+    Err(Failure { status, text: if text.is_empty() { format!("{status} {}", response.status_text()) } else { text }, retry })
 }
 
 pub async fn get<T: DeserializeOwned>(path: &str) -> Result<T, Failure> {
@@ -36,6 +38,11 @@ pub async fn get<T: DeserializeOwned>(path: &str) -> Result<T, Failure> {
 
 pub async fn put<B: Serialize, T: DeserializeOwned>(path: &str, body: &B) -> Result<T, Failure> {
     let request = Request::put(path).json(body).map_err(failure)?;
+    checked(request.send().await).await?.json().await.map_err(failure)
+}
+
+pub async fn post<B: Serialize, T: DeserializeOwned>(path: &str, body: &B) -> Result<T, Failure> {
+    let request = Request::post(path).json(body).map_err(failure)?;
     checked(request.send().await).await?.json().await.map_err(failure)
 }
 

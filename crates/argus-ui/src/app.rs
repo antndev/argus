@@ -62,6 +62,8 @@ fn Login() -> impl IntoView {
     let store = use_store();
     let password = RwSignal::new(String::new());
     let repeat = RwSignal::new(String::new());
+    let code = RwSignal::new(String::new());
+    let until = RwSignal::new(0.0);
     let error = RwSignal::new(String::new());
     let bad = RwSignal::new(false);
     let shake = RwSignal::new(0u32);
@@ -74,7 +76,7 @@ fn Login() -> impl IntoView {
     };
     let submit = move |event: SubmitEvent| {
         event.prevent_default();
-        if busy.get_untracked() {
+        if busy.get_untracked() || until.get_untracked() > js_sys::Date::now() {
             return;
         }
         let setup = store.gate.get_untracked() == "setup";
@@ -89,15 +91,20 @@ fn Login() -> impl IntoView {
         }
         busy.set(true);
         let path = if setup { "/api/v1/setup" } else { "/api/v1/login" };
+        let body = serde_json::json!({ "password": secret, "code": code.get_untracked() });
         spawn_local(async move {
-            match api::send(path, &serde_json::json!({ "password": secret })).await {
+            match api::send(path, &body).await {
                 Ok(()) => {
-                    let _ = password.try_set(String::new());
-                    let _ = repeat.try_set(String::new());
-                    let _ = error.try_set(String::new());
+                    for signal in [password, repeat, code, error] {
+                        let _ = signal.try_set(String::new());
+                    }
                     store.refresh();
                 }
+                Err(failure) if failure.status == 429 => {
+                    let _ = until.try_set(js_sys::Date::now() + f64::from(failure.retry.max(1)) * 1_000.0);
+                }
                 Err(failure) => {
+                    let _ = code.try_set(String::new());
                     fail(if failure.status == 401 { String::new() } else { format::capitalize(&failure.text) });
                     store.check_session();
                 }
@@ -106,11 +113,13 @@ fn Login() -> impl IntoView {
         });
     };
     let field = move |value: RwSignal<String>, placeholder: &'static str, autocomplete: &'static str, eye: bool| {
+        let numeric = autocomplete == "one-time-code";
         view! {
             <div class="login-field" class:bad=move || bad.get()>
                 <input
-                    class:masked=move || !reveal.get() && !value.get().is_empty()
-                    type=move || if reveal.get() { "text" } else { "password" }
+                    class:masked=move || !numeric && !reveal.get() && !value.get().is_empty()
+                    type=move || if numeric || reveal.get() { "text" } else { "password" }
+                    inputmode=numeric.then_some("numeric")
                     autocomplete=autocomplete
                     placeholder=placeholder
                     aria-label=placeholder
@@ -140,11 +149,28 @@ fn Login() -> impl IntoView {
         n if n % 2 == 1 => "login-fields shake-a",
         _ => "login-fields shake-b",
     };
-    let note = move || view! { <p class="login-note" role="alert">{move || error.get()}</p> };
-    let ready = move || !password.get().is_empty() && (store.gate.get() != "setup" || !repeat.get().is_empty());
+    let waiting = move || until.get() - store.clock.get();
+    let note = move || {
+        view! {
+            <p class="login-note" role="alert">
+                {move || match waiting() {
+                    left if left > 0.0 => format!("Too many attempts, try again in {}", format::duration(left)),
+                    _ => error.get(),
+                }}
+            </p>
+        }
+    };
+    let ready = move || {
+        !password.get().is_empty()
+            && match store.gate.get().as_str() {
+                "setup" => !repeat.get().is_empty(),
+                _ => !store.two_factor.get() || !code.get().trim().is_empty(),
+            }
+    };
+    let blocked = move || !ready() || busy.get() || waiting() > 0.0;
     let submit_button = move |label: &'static str| {
         view! {
-            <button class="btn primary" type="submit" aria-busy=move || busy.get().to_string() aria-label=label disabled=move || !ready() || busy.get()>
+            <button class="btn primary" type="submit" aria-busy=move || busy.get().to_string() aria-label=label disabled=blocked>
                 {move || if busy.get() { view! { <span class="spinner" aria-hidden="true"></span> }.into_any() } else { label.into_any() }}
             </button>
         }
@@ -174,7 +200,10 @@ fn Login() -> impl IntoView {
         .into_any(),
         _ => view! {
             <h1>"Welcome!"</h1>
-            <div class=fields>{field(password, "Password", "current-password", true)}</div>
+            <div class=fields>
+                {field(password, "Password", "current-password", true)}
+                <Show when=move || store.two_factor.get()>{field(code, "Authenticator code", "one-time-code", false)}</Show>
+            </div>
             {submit_button("Sign in")}
             {note()}
         }

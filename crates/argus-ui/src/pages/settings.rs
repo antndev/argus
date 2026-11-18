@@ -22,7 +22,7 @@ const PAGES: [(&str, &str); 12] = [
     ("peer", "External node"),
     ("backups", "ZeroByte integration"),
     ("retention", "Data retention"),
-    ("dashboard", "Password"),
+    ("dashboard", "Sign-in"),
     ("appearance", "Appearance"),
     ("json", "JSON"),
     ("about", "About"),
@@ -924,8 +924,26 @@ fn retention(store: Store) -> impl IntoView {
     }
 }
 
-fn dashboard(store: Store) -> impl IntoView {
+fn secret_input(value: RwSignal<String>, label: &'static str, autocomplete: &'static str) -> impl IntoView {
+    let numeric = autocomplete == "one-time-code";
+    view! {
+        <input
+            class="input"
+            class:mono=numeric
+            type=if numeric { "text" } else { "password" }
+            inputmode=numeric.then_some("numeric")
+            autocomplete=autocomplete
+            aria-label=label
+            spellcheck="false"
+            prop:value=move || value.get()
+            on:input=move |ev| value.set(event_target_value(&ev))
+        />
+    }
+}
+
+fn password_change(store: Store) -> impl IntoView {
     let current = RwSignal::new(String::new());
+    let code = RwSignal::new(String::new());
     let next = RwSignal::new(String::new());
     let repeat = RwSignal::new(String::new());
     let busy = RwSignal::new(false);
@@ -935,35 +953,129 @@ fn dashboard(store: Store) -> impl IntoView {
             return;
         }
         busy.set(true);
-        let body = json!({ "current": current.get_untracked(), "password": next.get_untracked() });
+        let body = json!({ "current": current.get_untracked(), "password": next.get_untracked(), "code": code.get_untracked() });
         spawn_local(async move {
             match api::send("/api/v1/password", &body).await {
                 Ok(()) => {
                     store.notify("Password changed, other sessions were signed out");
-                    for field in [current, next, repeat] {
+                    for field in [current, code, next, repeat] {
                         field.set(String::new());
                     }
                 }
-                Err(failure) => store.notify(format!("Not changed, {failure}")),
+                Err(failure) => {
+                    code.set(String::new());
+                    store.notify(format!("Not changed, {failure}"));
+                }
             }
             busy.set(false);
         });
     };
-    let input = move |value: RwSignal<String>, autocomplete: &'static str| {
-        view! {
-            <input class="input" type="password" autocomplete=autocomplete prop:value=move || value.get() on:input=move |ev| value.set(event_target_value(&ev))/>
-        }
-    };
-    let follower = move || read(store, "/peer").is_some() && read(store, "/peer/url").is_none();
     view! {
-        <p class="lead">"One password protects the dashboard on both nodes. Only its argon2 hash is stored, in the database and never in the config file. The internal node shares it with the external one. If it is lost, run argus-node reset-password on the internal node and set a new one within 15 minutes."</p>
-        <Show when=move || !follower() fallback=|| view! { <p class="empty-note">"Change the password on the internal node, it reaches this node with the next sync."</p> }>
-        {row("Current password", "", input(current, "current-password"))}
-        {row("New password", "At least 10 characters.", input(next, "new-password"))}
-        {row("Repeat new password", "", input(repeat, "new-password"))}
-        {row("", "Changing the password signs out every session on both nodes.", view! {
+        {group("Password")}
+        {row("Current password", "", secret_input(current, "Current password", "current-password"))}
+        <Show when=move || store.two_factor.get()>{row("Authenticator code", "", secret_input(code, "Authenticator code", "one-time-code"))}</Show>
+        {row("New password", "At least 10 characters.", secret_input(next, "New password", "new-password"))}
+        {row("Repeat new password", "", secret_input(repeat, "Repeat new password", "new-password"))}
+        {row("", "Changing the password signs out every other session on both nodes.", view! {
             <button class="btn primary" type="button" disabled=move || busy.get() on:click=change>"Change password"</button>
         })}
+    }
+}
+
+#[derive(Clone, serde::Deserialize)]
+struct Enrollment {
+    secret: String,
+    qr: Option<String>,
+}
+
+fn grouped(secret: &str) -> String {
+    secret.as_bytes().chunks(4).filter_map(|chunk| std::str::from_utf8(chunk).ok()).collect::<Vec<_>>().join(" ")
+}
+
+fn two_factor(store: Store) -> impl IntoView {
+    let enrollment = RwSignal::new(None::<Enrollment>);
+    let password = RwSignal::new(String::new());
+    let code = RwSignal::new(String::new());
+    let busy = RwSignal::new(false);
+    let start = move |_| {
+        busy.set(true);
+        spawn_local(async move {
+            match api::post::<_, Enrollment>("/api/v1/totp/start", &json!({})).await {
+                Ok(found) => enrollment.set(Some(found)),
+                Err(failure) => store.notify(format!("Not started, {failure}")),
+            }
+            busy.set(false);
+        });
+    };
+    let finish = move |path: &'static str, done: &'static str| {
+        move |_| {
+            busy.set(true);
+            let body = json!({ "password": password.get_untracked(), "code": code.get_untracked() });
+            spawn_local(async move {
+                match api::send(path, &body).await {
+                    Ok(()) => {
+                        store.notify(done);
+                        password.set(String::new());
+                        enrollment.set(None);
+                        store.check_session();
+                    }
+                    Err(failure) => store.notify(format!("Not changed, {failure}")),
+                }
+                code.set(String::new());
+                busy.set(false);
+            });
+        }
+    };
+    let confirm = move || {
+        view! {
+            {row("Password", "", secret_input(password, "Password", "current-password"))}
+            {row("Authenticator code", "The six digits the app shows right now.", secret_input(code, "Authenticator code", "one-time-code"))}
+        }
+    };
+    let content = move || {
+        match (store.two_factor.get(), enrollment.get()) {
+        (true, _) => view! {
+            {row("Authenticator app", "Every sign-in asks for the current code.", view! { <span class="value">"On"</span> })}
+            {confirm()}
+            {row("", "Turning it off signs out every other session on both nodes.", view! {
+                <button class="btn" type="button" disabled=move || busy.get() on:click=finish("/api/v1/totp/disable", "Two-factor sign-in is off")>"Turn off"</button>
+            })}
+        }
+        .into_any(),
+        (false, Some(enrollment_view)) => view! {
+            {row("Scan the code", "With an authenticator app such as 1Password, Bitwarden or Google Authenticator.", view! {
+                <div class="qr" role="img" aria-label="QR code for the authenticator app" inner_html=enrollment_view.qr.unwrap_or_default()></div>
+            })}
+            {row("Or enter the key", "", view! { <code class="code key">{grouped(&enrollment_view.secret)}</code> })}
+            {confirm()}
+            {row("", "Turning it on signs out every other session on both nodes.", view! {
+                <div class="ctl-row">
+                    <button class="btn" type="button" on:click=move |_| enrollment.set(None)>"Cancel"</button>
+                    <button class="btn primary" type="button" disabled=move || busy.get() on:click=finish("/api/v1/totp/enable", "Two-factor sign-in is on, other sessions were signed out")>"Turn on"</button>
+                </div>
+            })}
+        }
+        .into_any(),
+        (false, None) => row("Authenticator app", "Asks for a six-digit code from an app on your phone at every sign-in.", view! {
+            <button class="btn" type="button" disabled=move || busy.get() on:click=start>"Set up"</button>
+        })
+        .into_any(),
+    }
+    };
+    view! {
+        {group("Two-factor sign-in")}
+        {content}
+    }
+}
+
+fn dashboard(store: Store) -> impl IntoView {
+    store.check_session();
+    let follower = move || read(store, "/peer").is_some() && read(store, "/peer/url").is_none();
+    view! {
+        <p class="lead">"One password protects the dashboard on both nodes, two-factor sign-in adds a code from an authenticator app. The password is only stored as an argon2 hash, in the database and never in the config file, and the internal node shares the login with the external one. If the password or the phone is lost, run argus-node reset-password on the internal node, which also turns off two-factor sign-in, and set a new password within 15 minutes."</p>
+        <Show when=move || !follower() fallback=|| view! { <p class="empty-note">"Change the password and two-factor sign-in on the internal node, they reach this node with the next sync."</p> }>
+            {password_change(store)}
+            {two_factor(store)}
         </Show>
     }
 }

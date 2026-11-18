@@ -256,6 +256,7 @@ pub struct SyncPayload {
 #[serde(default)]
 pub struct LoginSync {
     pub password: Option<String>,
+    pub totp: Option<String>,
     pub key: String,
     pub changed: i64,
 }

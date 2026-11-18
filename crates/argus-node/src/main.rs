@@ -6,6 +6,7 @@ mod push;
 mod rules;
 mod session;
 mod sync;
+mod totp;
 mod ui;
 mod util;
 mod zerobyte;
@@ -55,7 +56,7 @@ pub struct App {
     wake: Mutex<Option<Sender<()>>>,
     queue: Mutex<Option<Sender<Message>>>,
     pending: Mutex<HashSet<String>>,
-    logins: Mutex<(i64, u32)>,
+    logins: Mutex<session::Throttle>,
     pub changes: tokio::sync::watch::Sender<u64>,
     links: Mutex<BTreeMap<String, u32>>,
     aliases: RwLock<HashMap<String, String>>,
@@ -93,7 +94,7 @@ impl App {
             wake: Mutex::new(None),
             queue: Mutex::new(None),
             pending: Mutex::new(HashSet::new()),
-            logins: Mutex::new((0, 0)),
+            logins: Mutex::new(session::Throttle::default()),
             changes: tokio::sync::watch::Sender::new(0),
             links: Mutex::new(BTreeMap::new()),
             aliases: RwLock::new(aliases),
@@ -171,7 +172,7 @@ impl App {
         lock(&self.held)
     }
 
-    pub fn logins(&self) -> MutexGuard<'_, (i64, u32)> {
+    pub fn logins(&self) -> MutexGuard<'_, session::Throttle> {
         lock(&self.logins)
     }
 
@@ -448,6 +449,9 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/v1/push/devices", post(notify::subscribe))
         .route("/api/v1/order", post(api::order))
         .route("/api/v1/password", post(session::change))
+        .route("/api/v1/totp/start", post(session::totp_start))
+        .route("/api/v1/totp/enable", post(session::totp_enable))
+        .route("/api/v1/totp/disable", post(session::totp_disable))
         .route_layer(axum::middleware::from_fn_with_state(app.clone(), session::require));
     let dashboard = Router::new()
         .merge(protected)
@@ -541,7 +545,7 @@ async fn main() {
     }
     if resetting {
         session::reset(&db, now_ms()).unwrap_or_else(|error| fail(format!("cannot reset the password: {error}")));
-        println!("dashboard password removed, open the dashboard within 15 minutes to set a new one");
+        println!("dashboard password and two-factor sign-in removed, open the dashboard within 15 minutes to set a new password");
         return;
     }
     if config.shared.agents.is_empty() {

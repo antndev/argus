@@ -63,6 +63,7 @@ pub struct Store {
     pub offline: RwSignal<bool>,
     pub locked: RwSignal<bool>,
     pub gate: RwSignal<String>,
+    pub two_factor: RwSignal<bool>,
     pub events: RwSignal<Vec<Event>>,
     pub toast: RwSignal<Option<(u64, String)>>,
     pub theme: RwSignal<Theme>,
@@ -93,6 +94,7 @@ impl Store {
             offline: RwSignal::new(false),
             locked: RwSignal::new(false),
             gate: RwSignal::new("login".to_string()),
+            two_factor: RwSignal::new(false),
             events: RwSignal::new(Vec::new()),
             toast: RwSignal::new(None),
             theme: RwSignal::new(Theme::load()),
@@ -133,6 +135,10 @@ impl Store {
                 let state = session["state"].as_str().unwrap_or("login").to_string();
                 if store.gate.with_untracked(|gate| *gate != state) {
                     store.gate.set(state);
+                }
+                let two_factor = session["two_factor"].as_bool().unwrap_or(false);
+                if store.two_factor.get_untracked() != two_factor {
+                    store.two_factor.set(two_factor);
                 }
             }
         });

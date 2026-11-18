@@ -2065,6 +2065,25 @@ td .sev {
   user-select: all;
 }
 
+.code.key {
+  margin-left: auto;
+  word-spacing: 0.25em;
+}
+
+.qr {
+  width: 168px;
+  margin-left: auto;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.qr svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
 .main > .offline {
   margin: 12px 28px 0;
 }
@@ -2493,7 +2512,9 @@ li[data-host]:has(> .list-item[aria-current="page"]) {
     justify-content: flex-start;
   }
 
-  .ctl > .value.mono {
+  .ctl > .value.mono,
+  .ctl > .qr,
+  .ctl > .code.key {
     margin-left: 0;
     text-align: left;
   }

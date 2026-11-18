@@ -58,13 +58,27 @@ changes anything on them.
 
 - The dashboard always needs a login. The password is never stored in the config file, only its argon2 hash in the
   node's database. A node without a password accepts a new one only within 15 minutes after its start or after
-  `argus-node reset-password`, which needs access to the server. Sessions are signed with a random key (HMAC SHA-256)
-  and sent as an HttpOnly, SameSite Strict cookie (Secure behind HTTPS) for 30 days. Failed logins wait one second,
-  password checks run one at a time, and after 20 wrong passwords in 10 minutes the node refuses logins for the rest
-  of that window. Changing or resetting the password replaces the key and ends every session. Signing out removes the
-  cookie from that browser only.
-- With two nodes the internal node sends the password hash and the session key to the external node over the
-  authenticated sync. The external node never accepts a new password, neither on first visit nor from the sync
+  `argus-node reset-password`, which needs access to the server.
+- Two-factor sign-in is optional and uses time-based one-time codes (RFC 6238, SHA-1, 6 digits, 30 s). The node accepts
+  the code of the current step and one step on either side, and every code only once. Turning it on needs the
+  password and a code from the new secret, turning it off needs both again, and with it on a password change needs a
+  code too. The secret is stored in the node's database in clear text, because the node has to compute the codes;
+  whoever can read the database can also read the session key. `argus-node reset-password` removes the password and
+  the secret, which is the way back in when the phone is lost.
+- Sessions are signed with a random key (HMAC SHA-256) and sent as an HttpOnly, SameSite Strict cookie. Behind HTTPS
+  (`X-Forwarded-Proto: https`) the cookie is `__Host-argus_session` with Secure, so no other host or subdomain can set
+  or overwrite it, and a cookie without the prefix is ignored. A session ends after 7 days without use and 30 days
+  after sign-in at the latest; while it is used the node renews it at most once an hour, never past the 30 days.
+  Changing or resetting the password and turning two-factor sign-in on or off replace the key and end every other
+  session. Signing out removes the cookie from that browser only.
+- Wrong passwords and codes make the next attempt wait. Every attempt counts before its check, password checks run one
+  at a time and a failed one answers after one second. After five failed attempts the node refuses all attempts for
+  30 s, and every further failure doubles the wait up to 15 minutes (`429` with `Retry-After`). A successful sign-in
+  or an hour without failures resets the count. The limit is global per node and not per address, because behind a
+  reverse proxy the client address can not be trusted; someone who keeps guessing therefore also delays your own
+  sign-in on that node, while existing sessions keep working.
+- With two nodes the internal node sends the password hash, the two-factor secret and the session key to the external
+  node over the authenticated sync. The external node never accepts a new password, neither on first visit nor from the sync
   response, so a public external node cannot change the login. Whoever controls the external node can read the hash
   and sign sessions for both nodes, which matters only for someone who can also reach the internal node.
 - The configuration API never returns secrets. They come back as `********`, and a save that keeps `********`
@@ -72,7 +86,8 @@ changes anything on them.
   configuration changed since it was loaded.
 - A node that should not show the dashboard publicly exposes only `/api/v1/ingest`, `/api/v1/sync` and the receipt
   paths through its reverse proxy, the dashboard stays reachable through an SSH tunnel. Serving the whole dashboard
-  publicly, for one name on both nodes, puts the login page on the internet; use a long password.
+  publicly, for one name on both nodes, puts the login page on the internet; use a long password and two-factor
+  sign-in.
 
 ### Known limits
 
