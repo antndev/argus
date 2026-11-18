@@ -6,7 +6,6 @@ use wasm_bindgen::prelude::*;
 
 use crate::api;
 use crate::components::segmented;
-use crate::format;
 use crate::store::{Range, use_store};
 
 #[wasm_bindgen]
@@ -22,6 +21,9 @@ extern "C" {
 
     #[wasm_bindgen(catch, js_namespace = argusCharts, js_name = isolate)]
     fn js_isolate(id: u32, index: usize) -> Result<String, JsValue>;
+
+    #[wasm_bindgen(catch, js_namespace = argusCharts, js_name = format)]
+    fn js_format(unit: &str, suffix: &str, value: f64) -> Result<String, JsValue>;
 }
 
 const VIEWS: &[(bool, &str)] = &[(false, "Containers"), (true, "Each container")];
@@ -45,17 +47,6 @@ impl Unit {
             Self::Load => "load",
             Self::Size => "gb",
             Self::Plain => "plain",
-        }
-    }
-
-    fn format(self, value: f64) -> String {
-        match self {
-            Self::Percent => format!("{value:.1}%"),
-            Self::Celsius => format!("{value:.1} °C"),
-            Self::Rate => format::rate(value),
-            Self::Load => format!("{value:.2}"),
-            Self::Size => format::gigabytes(value),
-            Self::Plain => format!("{value:.1}"),
         }
     }
 }
@@ -117,10 +108,7 @@ impl ChartSpec {
     }
 
     fn text(&self, value: f64) -> String {
-        match (self.unit, self.suffix.is_empty()) {
-            (Unit::Plain, false) => format!("{value:.1} {}", self.suffix),
-            (unit, _) => unit.format(value),
-        }
+        js_format(self.unit.key(), &self.suffix, value).unwrap_or_default()
     }
 
     pub fn detail(mut self, label: &str, key: String, factor: f64) -> Self {

@@ -13,6 +13,10 @@ window.argusCharts = (() => {
     gb: (v) => (v >= 1000 ? `${(v / 1000).toFixed(1)} TB` : v >= 10 ? `${Math.round(v)} GB` : `${v.toFixed(1)} GB`),
   };
 
+  function format(unit, suffix, value) {
+    return unit === "plain" ? `${value.toFixed(1)} ${suffix || ""}`.trim() : (formats[unit] || formats.load)(value);
+  }
+
   function niceCeil(value) {
     if (value <= 0) return 1;
     const power = Math.pow(10, Math.floor(Math.log10(value)));
@@ -36,7 +40,13 @@ window.argusCharts = (() => {
   function stamp(seconds) {
     const date = new Date(seconds * 1000);
     const today = new Date();
-    const day = date.toDateString() === today.toDateString() ? "Today" : `${date.getDate()} ${months[date.getMonth()]}`;
+    const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+    const day =
+      date.toDateString() === today.toDateString()
+        ? "Today"
+        : date.toDateString() === yesterday.toDateString()
+          ? "Yesterday"
+          : `${date.getDate()} ${months[date.getMonth()]}`;
     return `${day}, ${pad(date.getHours())}:${pad(date.getMinutes())}`;
   }
 
@@ -89,7 +99,6 @@ window.argusCharts = (() => {
 
   function tooltip(spec, colors) {
     let tip;
-    const format = spec.unit === "plain" ? (v) => `${v.toFixed(1)} ${spec.suffix || ""}`.trim() : formats[spec.unit] || formats.load;
     return {
       hooks: {
         init: (u) => {
@@ -120,7 +129,7 @@ window.argusCharts = (() => {
             return;
           }
           const value = u.data[nearest + 1][i];
-          const row = `<div class="chart-tip-row"><i style="background:${colors[nearest % colors.length]}"></i><span>${escape(spec.series[nearest])}</span><b>${format(value)}</b></div>`;
+          const row = `<div class="chart-tip-row"><i style="background:${colors[nearest % colors.length]}"></i><span>${escape(spec.series[nearest])}</span><b>${format(spec.unit, spec.suffix, value)}</b></div>`;
           tip.innerHTML = `<div class="chart-tip-time">${stamp(u.data[0][i])}</div>${row}`;
           tip.hidden = false;
           const width = u.over.clientWidth;
@@ -247,5 +256,5 @@ window.argusCharts = (() => {
     return JSON.stringify(entry.shown);
   }
 
-  return { create, update, destroy, isolate };
+  return { create, update, destroy, isolate, format };
 })();

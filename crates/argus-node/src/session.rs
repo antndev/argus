@@ -419,8 +419,7 @@ pub async fn totp_start(State(app): State<Arc<App>>) -> Response {
     if db::set_secret(&app.db(), TOTP_PENDING, &secret).is_err() {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
-    let uri = totp::uri(&secret);
-    ([(header::CACHE_CONTROL, "no-store")], Json(json!({ "secret": secret, "qr": totp::qr(&uri), "uri": uri }))).into_response()
+    ([(header::CACHE_CONTROL, "no-store")], Json(json!({ "qr": totp::qr(&totp::uri(&secret)), "secret": secret }))).into_response()
 }
 
 pub async fn totp_enable(State(app): State<Arc<App>>, Json(form): Json<Confirm>) -> Response {

@@ -2,7 +2,7 @@ use argus_model::{HostSummary, Severity, metric_key as key};
 use leptos::prelude::*;
 
 use crate::charts::{Chart, ChartSpec, Unit};
-use crate::components::{AlertList, Pill, check_severity, segmented};
+use crate::components::{AlertList, Pill, check_severity, platform, report_status, segmented, service_row};
 use crate::format;
 use crate::icons;
 use crate::store::{Range, latest, limit, temperatures, use_store};
@@ -88,24 +88,13 @@ fn chart_specs(host: &HostSummary) -> Vec<ChartSpec> {
     specs
 }
 
-fn bytes(value: u64) -> String {
-    let gigabytes = value as f64 / 1e9;
-    if gigabytes >= 1_000.0 {
-        format!("{:.1} TB", gigabytes / 1_000.0)
-    } else if gigabytes >= 10.0 {
-        format!("{gigabytes:.0} GB")
-    } else {
-        format!("{gigabytes:.1} GB")
-    }
-}
-
 fn facts(host: &HostSummary, now: f64) -> Vec<(String, String)> {
     let info = &host.info;
     let uptime = info.uptime_s as f64 * 1_000.0 + (now - host.last_seen as f64).max(0.0);
     let mut list = vec![
-        ("Platform".to_string(), format!("{}, {}", info.os, info.arch)),
+        ("Platform".to_string(), platform(info)),
         ("Kernel".to_string(), info.kernel.clone()),
-        ("Hardware".to_string(), format!("{} cores, {} RAM", info.cores, bytes(info.memory_bytes))),
+        ("Hardware".to_string(), format!("{} cores, {} RAM", info.cores, format::memory(info.memory_bytes as f64 / 1_048_576.0))),
         ("Uptime".to_string(), format::duration(uptime)),
         ("Agent".to_string(), format!("{} {}", format::capitalize(&info.agent), info.version)),
         ("Alerts from".to_string(), format::capitalize(&format!("{} node", host.owner))),
@@ -138,18 +127,8 @@ pub fn HostPage(host_id: String) -> impl IntoView {
     let specs = Memo::new(move |_| host.with(|h| h.as_ref().map(chart_specs).unwrap_or_default()));
     let id = host_id.clone();
     let state = move || host.with(|h| h.as_ref().map(|h| h.state).unwrap_or_default());
-    let seen = move || {
-        host.with(|h| {
-            h.as_ref()
-                .filter(|h| h.last_seen > 0)
-                .map(|h| if h.connected { "Connected".to_string() } else { format!("Last report {}", format::ago(h.last_seen as f64, store.clock.get())) })
-        })
-        .unwrap_or_default()
-    };
-    let about = move || {
-        host.with(|h| h.as_ref().map(|h| [h.info.os.clone(), h.info.arch.clone()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(", ")))
-            .unwrap_or_default()
-    };
+    let seen = move || host.with(|h| h.as_ref().filter(|h| h.last_seen > 0).map(|h| report_status(h, store.clock.get()))).unwrap_or_default();
+    let about = move || host.with(|h| h.as_ref().map(|h| platform(&h.info))).unwrap_or_default();
     let filesystems = move || {
         host.with(|h| {
             h.as_ref()
@@ -165,7 +144,7 @@ pub fn HostPage(host_id: String) -> impl IntoView {
                                 <li>
                                     <div class="fs-top">
                                         <span class="mono">{fs.mount.clone()}</span>
-                                        <span>{format::percent(used)}" "<span class="dim">{format!("of {}", bytes(fs.size_bytes))}</span></span>
+                                        <span>{format::percent(used)}" "<span class="dim">{format!("of {}", format::gigabytes(fs.size_bytes as f64 / 1e9))}</span></span>
                                     </div>
                                     <span class=if over { "bar big warning" } else { "bar big" }>
                                         <i style=format!("width:{:.1}%", used.clamp(1.0, 100.0))></i>
@@ -213,7 +192,7 @@ pub fn HostPage(host_id: String) -> impl IntoView {
     let many_interfaces = move || interfaces().len() > 1;
     let waiting = move || host.with(|h| h.as_ref().is_some_and(|h| h.last_seen == 0));
     let scoped = StoredValue::new(host_id.clone());
-    let alerting = move || store.alerts().iter().any(|a| scoped.with_value(|id| a.host == *id));
+    let alerting = move || store.alerts.with(|list| list.iter().any(|a| scoped.with_value(|id| a.host == *id)));
 
     view! {
         <div class="detail-head">
@@ -236,7 +215,9 @@ pub fn HostPage(host_id: String) -> impl IntoView {
                 <AlertList host=scoped.get_value()/>
             </section>
         </Show>
-        <div class="chart-grid">{move || specs.get().into_iter().map(|spec| view! { <Chart spec=spec/> }).collect_view()}</div>
+        <div class="chart-grid">
+            <For each=move || specs.get() key=|spec| format!("{spec:?}") children=|spec| view! { <Chart spec=spec/> }/>
+        </div>
         <div class="two">
             <section>
                 <div class="sec-head"><h2>"Filesystems"</h2></div>
@@ -254,15 +235,7 @@ pub fn HostPage(host_id: String) -> impl IntoView {
                     <table>
                         <thead><tr><th>"Status"</th><th>"Service"</th><th>"Type"</th><th>"Result"</th><th class="num">"Latency"</th></tr></thead>
                         <tbody>
-                            {move || checks().into_iter().map(|c| view! {
-                                <tr>
-                                    <td class="status"><Pill severity=check_severity(c.status)/></td>
-                                    <td><span class="check-name">{c.name.clone()}</span><span class="sub mono clip" title=c.target.clone()>{c.target.clone()}</span></td>
-                                    <td class="hide-sm"><span class="tag">{c.kind.clone()}</span></td>
-                                    <td><span class="msg" title=c.message.clone()>{c.message.clone()}</span></td>
-                                    <td class="num">{c.latency_ms.map(format::latency).unwrap_or_default()}</td>
-                                </tr>
-                            }).collect_view()}
+                            {move || checks().into_iter().map(|c| service_row(check_severity(c.status), c, None, None)).collect_view()}
                         </tbody>
                     </table>
                 </div>

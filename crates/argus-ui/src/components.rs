@@ -1,4 +1,4 @@
-use argus_model::{Alert, BackupSchedule, BackupState, CheckResult, CheckStatus, HostSummary, SERVICES_HOST, SeriesData, Severity, metric_key};
+use argus_model::{BACKUP_HOST, BackupSchedule, BackupState, CheckResult, CheckStatus, HostInfo, HostSummary, SERVICES_HOST, SeriesData, Severity, metric_key};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
@@ -6,7 +6,22 @@ use crate::api;
 use crate::format;
 use crate::icons;
 use crate::route::Route;
-use crate::store::{Store, fullest, hottest, latest, use_store};
+use crate::store::{Store, fullest, hottest, latest, limit, use_store};
+
+pub const NO_HOSTS: &str = "No agent has reported yet. Add one under Settings, Hosts and agents.";
+pub const NO_SERVICES: &str = "No services yet. Add them under Settings, Services.";
+
+pub fn platform(info: &HostInfo) -> String {
+    [format::capitalize(&info.os), info.arch.clone()].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join(", ")
+}
+
+pub fn report_status(host: &HostSummary, now: f64) -> String {
+    match (host.last_seen, host.connected) {
+        (0, _) => "Waiting for the first report".to_string(),
+        (_, true) => "Connected".to_string(),
+        (seen, false) => format!("Last report {}", format::ago(seen as f64, now)),
+    }
+}
 
 pub fn class(severity: Severity) -> &'static str {
     match severity {
@@ -169,34 +184,27 @@ pub fn HostCard(id: String, index: usize) -> impl IntoView {
     let lookup = id.clone();
     let host = Memo::new(move |_| store.host(&lookup));
     let read = move |f: fn(&HostSummary) -> Option<f64>| host.with(|h| h.as_ref().and_then(f));
+    let over = move |group: &'static str, field: &'static str| {
+        host.with(|h| h.as_ref().and_then(|h| Some(latest(h, group, "", field)? >= limit(h, group, "", field).unwrap_or(85.0)))).unwrap_or(false)
+    };
     let state = move || host.with(|h| h.as_ref().map(|h| h.state).unwrap_or_default());
     let waiting = move || host.with(|h| h.as_ref().is_some_and(|h| h.last_seen == 0));
-    let meta = move || {
-        host.with(|h| h.as_ref().map(|h| if h.last_seen == 0 { "Waiting for the first report".to_string() } else { format!("{}, {}", h.info.os, h.info.arch) }))
+    let meta =
+        move || host.with(|h| h.as_ref().map(|h| if h.last_seen == 0 { report_status(h, store.clock.get()) } else { platform(&h.info) })).unwrap_or_default();
+    let seen = move || {
+        host.with(|h| h.as_ref().map(|h| if h.last_seen == 0 { "Start the agent with its token".to_string() } else { report_status(h, store.clock.get()) }))
             .unwrap_or_default()
     };
-    let seen = move || {
-        host.with(|h| {
-            h.as_ref().map(|h| {
-                if h.last_seen == 0 {
-                    "Start the agent with its token".to_string()
-                } else if h.connected {
-                    "Connected".to_string()
-                } else {
-                    format!("Last report {}", format::ago(h.last_seen as f64, store.clock.get()))
-                }
-            })
-        })
-        .unwrap_or_default()
-    };
     let disk = move || host.with(|h| h.as_ref().and_then(fullest));
+    let disk_over =
+        move || host.with(|h| h.as_ref().and_then(|h| fullest(h).map(|(mount, v)| v >= limit(h, "fs", &mount, "used").unwrap_or(85.0)))).unwrap_or(false);
     let heat = move || host.with(|h| h.as_ref().and_then(hottest));
     let has_heat = move || heat().is_some();
     let href = Route::Host(id.clone()).href();
     let spark = StoredValue::new(id.clone());
     view! {
         <a
-            class=move || format!("host-card {}", class(state()))
+            class="host-card"
             class:pending=waiting
             href=href
             style=format!("--i:{index}")
@@ -216,19 +224,19 @@ pub fn HostCard(id: String, index: usize) -> impl IntoView {
                     || "CPU".to_string(),
                     move || read(|h| latest(h, "cpu", "", "total")).map(format::percent).unwrap_or_else(|| "n/a".into()),
                     move || read(|h| latest(h, "cpu", "", "total")).unwrap_or_default(),
-                    move || read(|h| latest(h, "cpu", "", "total")).is_some_and(|v| v >= 85.0),
+                    move || over("cpu", "total"),
                 )}
                 {meter(
                     || "Memory".to_string(),
                     move || read(|h| latest(h, "memory", "", "used")).map(format::percent).unwrap_or_else(|| "n/a".into()),
                     move || read(|h| latest(h, "memory", "", "used")).unwrap_or_default(),
-                    move || read(|h| latest(h, "memory", "", "used")).is_some_and(|v| v >= 85.0),
+                    move || over("memory", "used"),
                 )}
                 {meter(
                     move || disk().map(|(mount, _)| format!("Disk {mount}")).unwrap_or_else(|| "Disk".into()),
                     move || disk().map(|(_, v)| format::percent(v)).unwrap_or_else(|| "n/a".into()),
                     move || disk().map(|(_, v)| v).unwrap_or_default(),
-                    move || disk().is_some_and(|(_, v)| v >= 85.0),
+                    disk_over,
                 )}
                 <Show
                     when=has_heat
@@ -251,9 +259,11 @@ pub fn HostCard(id: String, index: usize) -> impl IntoView {
 pub fn AlertList(#[prop(optional, into)] host: Option<String>) -> impl IntoView {
     let store = use_store();
     let only = host.clone();
-    let rows = move || store.alerts().into_iter().filter(|alert| only.as_ref().is_none_or(|h| &alert.host == h)).collect::<Vec<_>>();
+    let rows = move || {
+        store.alerts.with(|list| list.iter().filter(|alert| only.as_ref().is_none_or(|h| &alert.host == h)).map(|alert| alert.key.clone()).collect::<Vec<_>>())
+    };
     let scoped = host.is_some();
-    let clear = move || !scoped && store.loaded() && store.alerts().is_empty();
+    let clear = move || !scoped && store.loaded() && store.alerts.with(Vec::is_empty);
     view! {
         <div class="alert-list">
             <Show when=clear>
@@ -262,26 +272,35 @@ pub fn AlertList(#[prop(optional, into)] host: Option<String>) -> impl IntoView 
                     <span>"Nothing needs attention right now."</span>
                 </div>
             </Show>
-            <For each=rows key=|alert| (alert.key.clone(), alert.severity, alert.title.clone()) children=move |alert| alert_row(store, alert, !scoped)/>
+            <For each=rows key=|key| key.clone() children=move |key| alert_row(store, key, !scoped)/>
         </div>
     }
 }
 
-fn alert_row(store: Store, alert: Alert, link: bool) -> impl IntoView {
-    let host_link = Route::Host(alert.host.clone()).href();
-    let since = alert.fired_at.unwrap_or(alert.since) as f64;
-    let detail = alert.detail.clone();
-    let full = alert.detail.clone();
-    let age = move || format!("For {}", format::duration(store.clock.get() - since));
+fn alert_row(store: Store, key: String, link: bool) -> impl IntoView {
+    let alert = Memo::new(move |_| store.alerts.with(|list| list.iter().find(|alert| alert.key == key).cloned().unwrap_or_default()));
+    let host = alert.with_untracked(|alert| alert.host.clone());
+    let host_link = Route::Host(host.clone()).href();
+    let severity = move || alert.with(|alert| alert.severity);
+    let since = move || alert.with(|alert| alert.fired_at.unwrap_or(alert.since)) as f64;
+    let age = move || format!("For {}", format::duration(store.clock.get() - since()));
+    let detail = move || {
+        alert.with(|alert| (!alert.detail.is_empty()).then(|| view! { <div class="ar-detail" title=alert.detail.clone()>{alert.detail.clone()}</div> }))
+    };
+    let source = match host.as_str() {
+        BACKUP_HOST => "ZeroByte".to_string(),
+        SERVICES_HOST => "Service".to_string(),
+        host => host.to_string(),
+    };
     view! {
-        <div class=format!("alert-row {}", class(alert.severity))>
-            {sev_icon(alert.severity)}
+        <div class="alert-row">
+            {move || sev_icon(severity())}
             <div class="ar-body">
-                <div><span class="ar-host">{match alert.host.as_str() { "zerobyte" => "ZeroByte".to_string(), SERVICES_HOST => "Service".to_string(), host => host.to_string() }}</span>{alert.title.clone()}</div>
-                {(!detail.is_empty()).then(|| view! { <div class="ar-detail" title=full>{detail}</div> })}
+                <div><span class="ar-host">{source}</span>{move || alert.with(|alert| alert.title.clone())}</div>
+                {detail}
                 <div class="ar-meta">{age}</div>
             </div>
-            {(link && store.host(&alert.host).is_some()).then(|| view! { <div class="ar-act"><a class="btn ghost" href=host_link>"Open host"</a></div> })}
+            {(link && store.host(&host).is_some()).then(|| view! { <div class="ar-act"><a class="btn ghost" href=host_link>"Open host"</a></div> })}
         </div>
     }
 }
@@ -310,6 +329,20 @@ impl ServiceRow {
     }
 }
 
+pub fn service_row(severity: Severity, check: CheckResult, runs: Option<AnyView>, history: Option<AnyView>) -> impl IntoView {
+    view! {
+        <tr>
+            <td class="status"><Pill severity=severity/></td>
+            <td><span class="check-name">{check.name.clone()}</span><span class="sub mono clip" title=check.target.clone()>{check.target.clone()}</span></td>
+            <td class="hide-sm"><span class="tag">{check.kind.clone()}</span></td>
+            {runs.map(|runs| view! { <td>{runs}</td> })}
+            <td><span class="msg" title=check.message.clone()>{check.message.clone()}</span></td>
+            {history.map(|history| view! { <td>{history}</td> })}
+            <td class="num">{check.latency_ms.map(format::latency).unwrap_or_default()}</td>
+        </tr>
+    }
+}
+
 pub fn all_checks(store: Store) -> Vec<ServiceRow> {
     let standalone = store.overview.with(|o| o.as_ref().map(|o| o.services.clone()).unwrap_or_default()).into_iter().map(|s| ServiceRow {
         host: SERVICES_HOST.to_string(),
@@ -329,7 +362,7 @@ pub fn ServiceList() -> impl IntoView {
     let store = use_store();
     let checks = Memo::new(move |_| all_checks(store));
     view! {
-        <Show when=move || !checks.with(Vec::is_empty) fallback=move || store.loaded().then(|| view! { <p class="meta">"No services yet. Add them under Settings, Services."</p> })>
+        <Show when=move || !checks.with(Vec::is_empty) fallback=move || store.loaded().then(|| view! { <p class="empty-note">{NO_SERVICES}</p> })>
         <ul class="svc sheet">
             {move || {
                 checks
@@ -416,7 +449,7 @@ pub fn BackupTable() -> impl IntoView {
     view! {
         <Show
             when=move || !empty()
-            fallback=|| view! { <p class="meta">"No backup data yet. Set up the ZeroByte integration in Settings."</p> }
+            fallback=|| view! { <p class="empty-note">"No backup data yet. Set up the ZeroByte integration in Settings."</p> }
         >
             <div class="tbl-wrap sheet stack">
                 <table>
@@ -437,7 +470,7 @@ pub fn BackupTable() -> impl IntoView {
     }
 }
 
-pub fn uptime_strip(history: Option<Vec<Option<f64>>>) -> impl IntoView {
+pub fn uptime_strip(history: Option<Vec<Option<f64>>>) -> AnyView {
     let Some(values) = history else {
         return view! { <span class="strip-wrap"><span class="dim">"Loading"</span></span> }.into_any();
     };

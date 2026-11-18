@@ -60,6 +60,7 @@ pub struct Store {
     pub range: RwSignal<Range>,
     pub check_filter: RwSignal<CheckFilter>,
     pub overview: RwSignal<Option<Overview>>,
+    pub alerts: Memo<Vec<Alert>>,
     pub offline: RwSignal<bool>,
     pub locked: RwSignal<bool>,
     pub gate: RwSignal<String>,
@@ -73,6 +74,9 @@ pub struct Store {
     pub save_error: RwSignal<Option<String>>,
     saves: StoredValue<u64>,
     toasts: StoredValue<u64>,
+    polls: StoredValue<u64>,
+    answered: StoredValue<u64>,
+    skew: StoredValue<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize)]
@@ -85,12 +89,20 @@ pub struct ConfigView {
 
 impl Store {
     pub fn new() -> Self {
+        let overview = RwSignal::new(None::<Overview>);
+        let alerts = Memo::new(move |_| {
+            let mut list: Vec<Alert> =
+                overview.with(|o| o.as_ref().map(|o| o.alerts.iter().filter(|a| a.state == AlertState::Firing).cloned().collect()).unwrap_or_default());
+            list.sort_by(|a, b| b.severity.cmp(&a.severity).then(a.since.cmp(&b.since)));
+            list
+        });
         Self {
             clock: RwSignal::new(js_sys::Date::now()),
             route: RwSignal::new(Route::current()),
             range: RwSignal::new(Range::SixHours),
             check_filter: RwSignal::new(CheckFilter::All),
-            overview: RwSignal::new(None),
+            overview,
+            alerts,
             offline: RwSignal::new(false),
             locked: RwSignal::new(false),
             gate: RwSignal::new("login".to_string()),
@@ -104,17 +116,44 @@ impl Store {
             save_error: RwSignal::new(None),
             saves: StoredValue::new(0),
             toasts: StoredValue::new(0),
+            polls: StoredValue::new(0),
+            answered: StoredValue::new(0),
+            skew: StoredValue::new(0.0),
+        }
+    }
+
+    pub fn now(&self) -> f64 {
+        js_sys::Date::now() + self.skew.get_value()
+    }
+
+    pub fn poll(&self) {
+        if self.answered.get_value() == self.polls.get_value() {
+            self.refresh();
         }
     }
 
     pub fn refresh(&self) {
         let store = *self;
+        let ticket = self.polls.get_value() + 1;
+        self.polls.set_value(ticket);
         spawn_local(async move {
-            match api::get::<Overview>("/api/v1/overview").await {
+            let result = api::get::<Overview>("/api/v1/overview").await;
+            if store.polls.get_value() != ticket {
+                return;
+            }
+            store.answered.set_value(ticket);
+            match result {
                 Ok(overview) => {
+                    let unlocking = store.locked.get_untracked();
+                    if overview.now > 0 {
+                        store.skew.set_value(overview.now as f64 - js_sys::Date::now());
+                    }
                     store.overview.set(Some(overview));
                     store.offline.set(false);
                     store.locked.set(false);
+                    if unlocking && store.dirty() {
+                        store.schedule_save();
+                    }
                 }
                 Err(failure) if failure.status == 401 => {
                     if !store.locked.get_untracked() {
@@ -167,8 +206,7 @@ impl Store {
     }
 
     pub fn dirty(&self) -> bool {
-        let saved = self.saved.with(|s| s.as_ref().map(|s| s.config.clone()));
-        self.config.with(|c| c.is_some() && *c != saved)
+        self.config.with(|config| config.is_some() && self.saved.with(|saved| config.as_ref() != saved.as_ref().map(|s| &s.config)))
     }
 
     pub fn schedule_save(&self) {
@@ -191,6 +229,9 @@ impl Store {
     }
 
     pub async fn settled(&self) -> bool {
+        if untrack(|| self.dirty()) {
+            self.save_error.set(None);
+        }
         for _ in 0..50 {
             if !untrack(|| self.dirty()) && !self.saving.get_untracked() {
                 return true;
@@ -279,13 +320,6 @@ impl Store {
 
     pub fn host(&self, id: &str) -> Option<HostSummary> {
         self.overview.with(|o| o.as_ref().and_then(|o| o.hosts.iter().find(|h| h.info.id == id).cloned()))
-    }
-
-    pub fn alerts(&self) -> Vec<Alert> {
-        let mut list: Vec<Alert> =
-            self.overview.with(|o| o.as_ref().map(|o| o.alerts.iter().filter(|a| a.state == AlertState::Firing).cloned().collect()).unwrap_or_default());
-        list.sort_by(|a, b| b.severity.cmp(&a.severity).then(a.since.cmp(&b.since)));
-        list
     }
 
     pub fn notify(&self, message: impl Into<String>) {

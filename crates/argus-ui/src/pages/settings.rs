@@ -92,8 +92,20 @@ fn set(root: &mut Value, path: &str, value: Option<Value>) {
     }
 }
 
+fn at<T>(store: Store, path: &str, f: impl FnOnce(Option<&Value>) -> T) -> T {
+    store.config.with(|c| f(c.as_ref().and_then(|c| c.pointer(path)).filter(|v| !v.is_null())))
+}
+
 fn read(store: Store, path: &str) -> Option<Value> {
-    store.config.with(|c| c.as_ref().and_then(|c| c.pointer(path)).filter(|v| !v.is_null()).cloned())
+    at(store, path, |value| value.cloned())
+}
+
+fn present(store: Store, path: &str) -> bool {
+    at(store, path, |value| value.is_some())
+}
+
+fn external(store: Store) -> bool {
+    present(store, "/peer") && !present(store, "/peer/url")
 }
 
 fn saved(store: Store, path: &str) -> Option<Value> {
@@ -124,11 +136,15 @@ fn write(store: Store, path: &str, value: Option<Value>) {
 }
 
 fn len(store: Store, path: &str) -> usize {
-    read(store, path).map_or(0, |v| v.as_array().map_or(0, Vec::len))
+    at(store, path, |value| value.and_then(Value::as_array).map_or(0, Vec::len))
 }
 
 fn keys(store: Store, path: &str) -> Vec<String> {
-    read(store, path).and_then(|v| v.as_object().map(|m| m.keys().cloned().collect())).unwrap_or_default()
+    at(store, path, |value| value.and_then(Value::as_object).map(|map| map.keys().cloned().collect()).unwrap_or_default())
+}
+
+fn restore(ev: &leptos::ev::Event, value: &str) {
+    event_target::<web_sys::HtmlInputElement>(ev).set_value(value);
 }
 
 fn origin() -> String {
@@ -154,7 +170,7 @@ fn row(title: &'static str, sub: impl IntoView + 'static, control: impl IntoView
     view! {
         <div class="row">
             <div class="row-head">
-                <div class="row-title">{title}</div>
+                <div>{title}</div>
                 <p class="row-sub">{sub}</p>
             </div>
             <div class="ctl">{control}</div>
@@ -197,7 +213,7 @@ fn value_input(store: Store, path: String, placeholder: &'static str) -> impl In
             spellcheck="false"
             placeholder=placeholder
             prop:value=move || text(store, &shown)
-            on:input=move |ev| {
+            on:change=move |ev| {
                 let raw = event_target_value(&ev);
                 let value = match serde_json::from_str::<Value>(raw.trim()) {
                     Ok(parsed @ (Value::Bool(_) | Value::Number(_))) => Some(parsed),
@@ -222,7 +238,7 @@ fn split_span(text: &str) -> (String, &'static str) {
 fn span_input(store: Store, path: String, optional: bool) -> impl IntoView {
     let (number_path, unit_path, shown_number, shown_unit) = (path.clone(), path.clone(), path.clone(), path);
     let store_span = move |path: &str, number: String, unit: &str| {
-        let value = if number.trim().is_empty() && optional { None } else { Some(json!(format!("{}{unit}", number.trim()))) };
+        let value = if number.trim().is_empty() { None } else { Some(json!(format!("{}{unit}", number.trim()))) };
         write(store, path, value);
     };
     view! {
@@ -234,9 +250,14 @@ fn span_input(store: Store, path: String, optional: bool) -> impl IntoView {
                 inputmode="numeric"
                 aria-label="Amount"
                 prop:value=move || split_span(&text(store, &shown_number)).0
-                on:input=move |ev| {
-                    let unit = split_span(&text(store, &number_path)).1;
-                    store_span(&number_path, event_target_value(&ev), unit);
+                on:change=move |ev| {
+                    let (stored, unit) = split_span(&text(store, &number_path));
+                    let number = event_target_value(&ev);
+                    if number.trim().is_empty() && !optional {
+                        restore(&ev, &stored);
+                    } else {
+                        store_span(&number_path, number, unit);
+                    }
                 }
             />
             <select
@@ -272,7 +293,10 @@ fn number_input(store: Store, path: String, placeholder: &'static str, optional:
                 match number {
                     Some(number) => write(store, &path, Some(number)),
                     None if optional && value.trim().is_empty() => write(store, &path, None),
-                    None => store.notify("Enter a number"),
+                    None => {
+                        restore(&ev, &text(store, &path));
+                        store.notify("Enter a number");
+                    }
                 }
             }
         />
@@ -379,7 +403,7 @@ fn token_input(store: Store, path: String, optional: bool, fresh: RwSignal<Optio
 }
 
 fn switch(store: Store, path: &'static str, template: fn() -> Value) -> impl IntoView {
-    let on = move || read(store, path).is_some();
+    let on = move || present(store, path);
     view! {
         <button
             class="switch"
@@ -460,8 +484,20 @@ fn agents(store: Store) -> impl IntoView {
                     });
                 }>"New token"</button>
                 <button class="btn small icon danger" type="button" aria-label=format!("Remove {id}") on:click=move |_| {
+                    if !window().confirm_with_message(&format!("Remove {remove}? Its token and services are deleted.")).unwrap_or(false) {
+                        return;
+                    }
                     write(store, &format!("/shared/agents/{}", escape(&remove)), None);
                     write(store, &format!("/shared/checks/{}", escape(&remove)), None);
+                    store.config.update(|config| {
+                        if let Some(Value::Array(services)) = config.as_mut().and_then(|c| c.pointer_mut("/shared/services")) {
+                            for service in services.iter_mut().filter_map(Value::as_object_mut) {
+                                if service.get("runner").and_then(Value::as_str) == Some(remove.as_str()) {
+                                    service.remove("runner");
+                                }
+                            }
+                        }
+                    });
                     if fresh.with_untracked(|f| f.as_ref().is_some_and(|(id, _)| *id == remove)) {
                         fresh.set(None);
                     }
@@ -473,7 +509,7 @@ fn agents(store: Store) -> impl IntoView {
     };
     let snippet = move || {
         fresh.get().map(|(id, token)| {
-            let site = if read(store, "/peer").is_some() && read(store, "/peer/url").is_none() { "site = \"external\"\n" } else { "" };
+            let site = if external(store) { "site = \"external\"\n" } else { "" };
             let config = format!("id = \"{id}\"\n{site}\n[[nodes]]\nurl = \"{}\"\ntoken = \"{token}\"", origin());
             let copied = config.clone();
             view! {
@@ -545,8 +581,11 @@ fn check_card(store: Store, base: String, runner: Option<Memo<Vec<String>>>) -> 
                 {field("Name", text_input(store, format!("{name}/name"), "Website", false))}
                 {field("Type", view! {
                     <select class="input" prop:value=move || kind.get() on:change=move |ev| {
-                        let name = text(store, &format!("{retype}/name"));
-                        write(store, &retype, Some(check_template(&event_target_value(&ev), name)));
+                        let mut next = check_template(&event_target_value(&ev), text(store, &format!("{retype}/name")));
+                        if let Some(runner) = read(store, &format!("{retype}/runner")) {
+                            next["runner"] = runner;
+                        }
+                        write(store, &retype, Some(next));
                     }>
                         <option value="http">"HTTP"</option>
                         <option value="tcp">"TCP port"</option>
@@ -567,7 +606,7 @@ fn check_card(store: Store, base: String, runner: Option<Memo<Vec<String>>>) -> 
                     })
                 })}
             </div>
-            <button class="btn small danger card-remove" type="button" aria-label="Remove service" on:click=move |_| write(store, &remove, None)>
+            <button class="btn small icon danger card-remove" type="button" aria-label="Remove service" on:click=move |_| write(store, &remove, None)>
                 <span class="ico" inner_html=icons::TRASH></span>
             </button>
         </div>
@@ -648,7 +687,7 @@ fn rule_card(store: Store, index: usize) -> impl IntoView {
     let (above, below, remove) = (format!("{base}/above"), format!("{base}/below"), base.clone());
     let direction = {
         let below = below.clone();
-        Memo::new(move |_| if read(store, &below).is_some() { "below" } else { "above" })
+        Memo::new(move |_| if present(store, &below) { "below" } else { "above" })
     };
     let limit_path = Memo::new(move |_| format!("{base}/{}", direction.get()));
     let p = move |field: &str| format!("/shared/rules/{index}/{field}");
@@ -679,7 +718,7 @@ fn rule_card(store: Store, index: usize) -> impl IntoView {
                 {field("For at least", span_input(store, p("for"), true))}
                 {field("Severity", select_input(store, p("severity"), &[("warning", "Warning"), ("critical", "Critical")]))}
             </div>
-            <button class="btn small danger card-remove" type="button" aria-label="Remove rule" on:click=move |_| write(store, &remove, None)>
+            <button class="btn small icon danger card-remove" type="button" aria-label="Remove rule" on:click=move |_| write(store, &remove, None)>
                 <span class="ico" inner_html=icons::TRASH></span>
             </button>
         </div>
@@ -768,7 +807,7 @@ fn this_device(store: Store) -> impl IntoView {
 }
 
 fn notifications(store: Store) -> impl IntoView {
-    let enabled = move || read(store, "/shared/push").is_some();
+    let enabled = move || present(store, "/shared/push");
     let devices = Memo::new(move |_| len(store, "/shared/push/devices"));
     let device = move |index: usize| {
         let base = format!("/shared/push/devices/{index}");
@@ -823,15 +862,12 @@ fn notifications(store: Store) -> impl IntoView {
 }
 
 fn peer_label(store: Store) -> &'static str {
-    match (read(store, "/peer").is_some(), read(store, "/peer/url").is_some()) {
-        (true, false) => "Internal node",
-        _ => "External node",
-    }
+    if external(store) { "Internal node" } else { "External node" }
 }
 
 fn peer(store: Store) -> impl IntoView {
-    let enabled = move || read(store, "/peer").is_some();
-    let internal = move || read(store, "/peer/url").is_some();
+    let enabled = move || present(store, "/peer");
+    let internal = move || present(store, "/peer/url");
     let role = move |ev| {
         let to_internal = event_target_value(&ev) == "internal";
         let address = saved(store, "/peer/url").filter(|_| to_internal).unwrap_or_else(|| json!(""));
@@ -856,10 +892,10 @@ fn peer(store: Store) -> impl IntoView {
 }
 
 fn backups(store: Store) -> impl IntoView {
-    let enabled = move || read(store, "/zerobyte").is_some();
+    let enabled = move || present(store, "/zerobyte");
     let fresh = RwSignal::new(None::<String>);
     Effect::new(move |_| {
-        if enabled() && read(store, "/zerobyte/webhook_token").is_none() {
+        if enabled() && !present(store, "/zerobyte/webhook_token") {
             fetch_token(move |token| {
                 write(store, "/zerobyte/webhook_token", Some(json!(token.clone())));
                 fresh.set(Some(token));
@@ -887,39 +923,15 @@ fn backups(store: Store) -> impl IntoView {
     }
 }
 
-fn keep(store: Store, label: &'static str, sub: &'static str, level: &'static str) -> impl IntoView {
-    let path = format!("/shared/retention/{level}");
-    let shown = path.clone();
-    let days = move || argus_model::parse_duration(&text(store, &shown)).map(|d| (d.as_secs() / 86_400).to_string()).unwrap_or_default();
-    view! {
-        <label class="field">
-            <span>{label}</span>
-            <input
-                class="input"
-                type="number"
-                min="1"
-                inputmode="numeric"
-                prop:value=days
-                on:input=move |ev| {
-                    if let Ok(days) = event_target_value(&ev).trim().parse::<u32>() {
-                        write(store, &path, Some(json!(format!("{days}d"))));
-                    }
-                }
-            />
-            <small class="field-sub">{sub}</small>
-        </label>
-    }
-}
-
 fn retention(store: Store) -> impl IntoView {
     view! {
         <p class="lead">"Older data is averaged into coarser points."</p>
         <div class="card plain">
             <div class="card-grid">
-                {keep(store, "Keep every report", "Days with full detail.", "raw")}
-                {keep(store, "Keep 5-minute averages", "Days of 5-minute points.", "medium")}
-                {keep(store, "Keep hourly averages", "Days of hourly points.", "long")}
-                {keep(store, "Keep daily averages", "Days of daily points.", "daily")}
+                {field("Keep every report", span_input(store, "/shared/retention/raw".into(), false))}
+                {field("Keep 5-minute averages", span_input(store, "/shared/retention/medium".into(), false))}
+                {field("Keep hourly averages", span_input(store, "/shared/retention/long".into(), false))}
+                {field("Keep daily averages", span_input(store, "/shared/retention/daily".into(), false))}
             </div>
         </div>
     }
@@ -1113,10 +1125,9 @@ fn two_factor(store: Store) -> impl IntoView {
 
 fn security(store: Store) -> impl IntoView {
     store.check_session();
-    let follower = move || read(store, "/peer").is_some() && read(store, "/peer/url").is_none();
     view! {
         <p class="lead">"Applies to both nodes. If you are locked out, run argus-node reset-password on the internal node."</p>
-        <Show when=move || !follower() fallback=|| view! { <p class="empty-note">"Change these on the internal node."</p> }>
+        <Show when=move || !external(store) fallback=|| view! { <p class="empty-note">"Change these on the internal node."</p> }>
             {password_change(store)}
             {two_factor(store)}
         </Show>

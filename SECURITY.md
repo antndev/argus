@@ -60,7 +60,7 @@ changes anything on them.
   node's database. A node without a password accepts a new one only within 15 minutes after its start or after
   `argus-node reset-password`, which needs access to the server.
 - Two-factor authentication is optional and uses TOTP codes (RFC 6238, SHA-1, 6 digits, 30 s). The node accepts
-  the code of the current step and one step on either side, and every code only once. With TOTP on, sign-in has two
+  the code of the current step and one step on either side, and every code only once per node. With TOTP on, sign-in has two
   steps: a correct password returns a signed ticket that is valid for 5 minutes and is no session, and only the ticket
   plus a current code start a session. A correct password alone never resets the wait after wrong attempts. Turning it on needs the
   password and a code from the new secret, turning it off needs both again, and with it on a password change needs a

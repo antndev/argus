@@ -1,7 +1,7 @@
 use leptos::prelude::*;
 
 use crate::charts::{Chart, ChartSpec, Unit};
-use crate::components::{AlertList, BackupTable, HostCard, ServiceList};
+use crate::components::{AlertList, BackupTable, HostCard, NO_HOSTS, ServiceList};
 use crate::store::{Range, use_store};
 
 #[component]
@@ -26,7 +26,7 @@ pub fn OverviewPage() -> impl IntoView {
                 <h2>"Hosts"</h2>
             </div>
             <Show when=move || store.loaded() && ids.with(Vec::is_empty)>
-                <p class="meta">"No agent has reported yet."</p>
+                <p class="empty-note">{NO_HOSTS}</p>
             </Show>
             <div class="host-grid">
                 <For

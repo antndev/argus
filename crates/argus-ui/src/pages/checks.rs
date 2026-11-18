@@ -5,8 +5,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::api;
-use crate::components::{Pill, all_checks, segmented, uptime_strip};
-use crate::format;
+use crate::components::{NO_SERVICES, all_checks, segmented, service_row, uptime_strip};
 use crate::store::{CheckFilter, use_store};
 
 #[component]
@@ -45,12 +44,14 @@ pub fn ChecksPage() -> impl IntoView {
             }
         }
     });
-    let rows = move || {
+    let shown = Memo::new(move |_| {
         let filter = store.check_filter.get();
-        checks
+        checks.get().into_iter().filter(|row| filter == CheckFilter::All || row.waiting || row.check.status != CheckStatus::Ok).collect::<Vec<_>>()
+    });
+    let rows = move || {
+        shown
             .get()
             .into_iter()
-            .filter(|row| filter == CheckFilter::All || row.waiting || row.check.status != CheckStatus::Ok)
             .map(|row| {
                 let strip = history.with(|map| map.get(&(row.host.clone(), row.check.name.clone())).cloned());
                 let runs = if row.standalone() {
@@ -59,46 +60,33 @@ pub fn ChecksPage() -> impl IntoView {
                 } else {
                     view! { <a class="link" href=crate::route::Route::Host(row.host.clone()).href()>{row.host.clone()}</a> }.into_any()
                 };
-                let severity = row.severity();
-                let check = row.check;
-                view! {
-                    <tr>
-                        <td class="status"><Pill severity=severity/></td>
-                        <td><span class="check-name">{check.name.clone()}</span><span class="sub mono clip" title=check.target.clone()>{check.target.clone()}</span></td>
-                        <td class="hide-sm"><span class="tag">{check.kind.clone()}</span></td>
-                        <td>{runs}</td>
-                        <td><span class="msg" title=check.message.clone()>{check.message.clone()}</span></td>
-                        <td>{uptime_strip(strip)}</td>
-                        <td class="num">{check.latency_ms.map(format::latency).unwrap_or_default()}</td>
-                    </tr>
-                }
+                service_row(row.severity(), row.check, Some(runs), Some(uptime_strip(strip)))
             })
             .collect_view()
     };
-    let empty = move || store.loaded() && checks.with(Vec::is_empty);
+    let empty = move || if checks.with(Vec::is_empty) { NO_SERVICES } else { "All services are OK." };
     view! {
         <div class="filters">
             {segmented(store.check_filter, CheckFilter::OPTIONS, "Filter checks")}
             <a class="btn" href="#/settings/checks"><span class="ico" inner_html=crate::icons::PLUS></span>"Add service"</a>
         </div>
-        <Show when=empty>
-            <p class="meta">"No services yet."</p>
+        <Show when=move || !shown.with(Vec::is_empty) fallback=move || store.loaded().then(|| view! { <p class="empty-note">{empty}</p> })>
+            <div class="tbl-wrap sheet stack">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>"Status"</th>
+                            <th>"Service"</th>
+                            <th>"Type"</th>
+                            <th>"Runs on"</th>
+                            <th>"Last result"</th>
+                            <th>"Last 24 h"</th>
+                            <th class="num">"Latency"</th>
+                        </tr>
+                    </thead>
+                    <tbody>{rows}</tbody>
+                </table>
+            </div>
         </Show>
-        <div class="tbl-wrap sheet stack">
-            <table>
-                <thead>
-                    <tr>
-                        <th>"Status"</th>
-                        <th>"Service"</th>
-                        <th>"Type"</th>
-                        <th>"Runs on"</th>
-                        <th>"Last result"</th>
-                        <th>"Last 24 h"</th>
-                        <th class="num">"Latency"</th>
-                    </tr>
-                </thead>
-                <tbody>{rows}</tbody>
-            </table>
-        </div>
     }
 }

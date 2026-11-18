@@ -4,6 +4,8 @@ use gloo_net::http::{Request, Response};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
+const TIMEOUT_MS: u32 = 10_000;
+
 #[derive(Debug)]
 pub struct Failure {
     pub status: u16,
@@ -33,7 +35,8 @@ async fn checked(response: Result<Response, gloo_net::Error>) -> Result<Response
 }
 
 pub async fn get<T: DeserializeOwned>(path: &str) -> Result<T, Failure> {
-    checked(Request::get(path).send().await).await?.json().await.map_err(failure)
+    let timeout = web_sys::AbortSignal::timeout_with_u32(TIMEOUT_MS);
+    checked(Request::get(path).abort_signal(Some(&timeout)).send().await).await?.json().await.map_err(failure)
 }
 
 pub async fn put<B: Serialize, T: DeserializeOwned>(path: &str, body: &B) -> Result<T, Failure> {

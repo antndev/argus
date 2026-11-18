@@ -26,8 +26,8 @@ pub fn App() -> impl IntoView {
             store.save_error.set(None);
         }
     });
-    set_interval(move || store.clock.set(js_sys::Date::now()), Duration::from_secs(1));
-    set_interval(move || store.refresh(), Duration::from_secs(5));
+    set_interval(move || store.clock.set(store.now()), Duration::from_secs(1));
+    set_interval(move || store.poll(), Duration::from_secs(5));
     let _ = window_event_listener(leptos::ev::hashchange, move |_| store.route.set(Route::current()));
 
     let section = Memo::new(move |_| store.route.with(|r| r.section()));
@@ -38,8 +38,6 @@ pub fn App() -> impl IntoView {
         "settings" => view! { <SettingsPage/> }.into_any(),
         _ => view! { <div class="body"><div class="page"><OverviewPage/></div></div> }.into_any(),
     };
-
-    store.check_session();
 
     view! {
         <Show when=move || !store.locked.get() fallback=|| view! { <Login/> }>
@@ -90,7 +88,7 @@ fn Login() -> impl IntoView {
     };
     let handle = move |failure: api::Failure| match failure.status {
         429 => {
-            let _ = until.try_set(js_sys::Date::now() + f64::from(failure.retry.max(1)) * 1_000.0);
+            let _ = until.try_set(store.now() + f64::from(failure.retry.max(1)) * 1_000.0);
         }
         401 => {
             let _ = code.try_set(String::new());
@@ -107,7 +105,7 @@ fn Login() -> impl IntoView {
     };
     let submit = move |event: SubmitEvent| {
         event.prevent_default();
-        if busy.get_untracked() || until.get_untracked() > js_sys::Date::now() {
+        if busy.get_untracked() || until.get_untracked() > store.now() {
             return;
         }
         let setup = store.gate.get_untracked() == "setup";
@@ -287,26 +285,28 @@ fn Sidebar() -> impl IntoView {
     let nav = NodeRef::<leptos::html::Nav>::new();
     let pill = RwSignal::new(None::<(i32, i32)>);
     let ready = RwSignal::new(false);
-    Effect::new(move |_| {
-        store.route.track();
-        let measure = move || {
-            let found = nav
-                .get_untracked()
-                .and_then(|nav| nav.query_selector("[aria-current=\"page\"]").ok().flatten())
-                .and_then(|item| item.dyn_into::<web_sys::HtmlElement>().ok())
-                .map(|item| (item.offset_top(), item.offset_height()));
-            pill.set(found);
-            set_timeout(move || ready.set(true), Duration::from_millis(50));
-        };
-        request_animation_frame(measure);
-    });
-    let resize = window_event_listener(leptos::ev::resize, move |_| {
-        if let Some(item) = nav
-            .get_untracked()
+    let current = move || {
+        nav.try_get_untracked()
+            .flatten()
             .and_then(|nav| nav.query_selector("[aria-current=\"page\"]").ok().flatten())
             .and_then(|item| item.dyn_into::<web_sys::HtmlElement>().ok())
-        {
-            pill.set(Some((item.offset_top(), item.offset_height())));
+            .map(|item| (item.offset_top(), item.offset_height()))
+    };
+    Effect::new(move |_| {
+        store.route.track();
+        request_animation_frame(move || {
+            let _ = pill.try_set(current());
+            set_timeout(
+                move || {
+                    let _ = ready.try_set(true);
+                },
+                Duration::from_millis(50),
+            );
+        });
+    });
+    let resize = window_event_listener(leptos::ev::resize, move |_| {
+        if let Some(found) = current() {
+            pill.set(Some(found));
         }
     });
     on_cleanup(move || resize.remove());
@@ -354,7 +354,7 @@ fn Sidebar() -> impl IntoView {
                 {nav_item("hosts", "Hosts", "#/hosts", icons::HOSTS, || None)}
                 {nav_item("checks", "Services", "#/services", icons::CHECKS, || None)}
                 {nav_item("alerts", "Alerts", "#/alerts", icons::ALERTS, move || {
-                    let active = store.alerts().len();
+                    let active = store.alerts.with(Vec::len);
                     (active > 0).then(|| (active.to_string(), true))
                 })}
                 <div class="nodes">{nodes}</div>

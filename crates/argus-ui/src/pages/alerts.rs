@@ -36,7 +36,7 @@ pub fn AlertsPage() -> impl IntoView {
     };
     let history_item = move |event: Event| {
         let note = if event.note.is_empty() { String::new() } else { format!(", {}", event.note) };
-        let meta = format!("{}, {}, {}{note}", format::day_label(event.time as f64, js_sys::Date::now()), format::hhmm(event.time as f64), event.kind);
+        let meta = format!("{}, {}, {}{note}", format::day_label(event.time as f64, store.now()), format::hhmm(event.time as f64), event.kind);
         view! {
             <li>
                 {sev_icon(event.severity)}
@@ -62,7 +62,7 @@ pub fn AlertsPage() -> impl IntoView {
                     <button class="btn small" type="button" on:click=clear>"Clear"</button>
                 </Show>
             </div>
-            <Show when=move || !store.events.with(Vec::is_empty) fallback=|| view! { <p class="meta">"Nothing happened yet."</p> }>
+            <Show when=move || !store.events.with(Vec::is_empty) fallback=|| view! { <p class="empty-note">"Nothing happened yet."</p> }>
                 <ol class="history sheet">
                     <For each=move || store.events.get() key=|event| event.id.clone() children=history_item/>
                 </ol>

@@ -2,7 +2,7 @@ use argus_model::Severity;
 use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
-use crate::components::{class, move_keys};
+use crate::components::{NO_HOSTS, class, move_keys, report_status};
 use crate::format;
 use crate::icons;
 use crate::pages::HostPage;
@@ -57,16 +57,12 @@ pub fn HostsPage() -> impl IntoView {
             host.with(|h| {
                 h.as_ref()
                     .map(|h| {
-                        if h.last_seen == 0 {
-                            return "Waiting for the first report".to_string();
-                        }
-                        let os = format::capitalize(&h.info.os);
-                        match h.state {
-                            Severity::Critical => format!("{os} · Needs attention"),
-                            Severity::Warning => format!("{os} · Warning"),
-                            _ if h.connected => format!("{os} · Connected"),
-                            _ => format!("{os} · {}", format::ago(h.last_seen as f64, store.clock.get())),
-                        }
+                        let status = match h.state {
+                            Severity::Critical => "Needs attention".to_string(),
+                            Severity::Warning => "Warning".to_string(),
+                            _ => report_status(h, store.clock.get()),
+                        };
+                        if h.last_seen == 0 { status } else { format!("{} · {status}", format::capitalize(&h.info.os)) }
                     })
                     .unwrap_or_default()
             })
@@ -142,7 +138,7 @@ pub fn HostsPage() -> impl IntoView {
                     <For each=move || ids.get() key=|id| id.clone() children=item/>
                 </ul>
                 <Show when=move || store.loaded() && ids.with(Vec::is_empty)>
-                    <p class="empty-note">{move || if filter.with(String::is_empty) { "No agent has reported yet. Add one under Settings, Hosts and agents." } else { "No host matches." }}</p>
+                    <p class="empty-note">{move || if filter.with(String::is_empty) { NO_HOSTS } else { "No host matches." }}</p>
                 </Show>
             </div>
             <section class="split-detail wide" aria-label="Host">
