@@ -28,6 +28,8 @@ const PASSWORD: &str = "dashboard_password";
 const TOTP: &str = "totp_secret";
 const TOTP_PENDING: &str = "totp_pending";
 const TOTP_STEP: &str = "totp_step";
+const TICKET: &str = "totp";
+const TICKET_LIFETIME: i64 = 5 * MINUTE;
 const SETUP_UNTIL: &str = "setup_until";
 const SETUP_WINDOW: i64 = 15 * MINUTE;
 const MIN_LENGTH: usize = 10;
@@ -140,6 +142,19 @@ fn check(db: &Db, token: &str, now: i64) -> Option<Session> {
     (expires > now && has_password(db) && same_secret(mac, &sign(&key(db), payload))).then_some(Session { started, expires })
 }
 
+fn ticket(db: &Db, now: i64) -> String {
+    let payload = format!("{TICKET}.{}.{}", now + TICKET_LIFETIME, random_id(24));
+    format!("{payload}.{}", sign(&key(db), &payload))
+}
+
+fn ticket_valid(db: &Db, ticket: &str, now: i64) -> bool {
+    let Some((payload, mac)) = ticket.rsplit_once('.') else { return false };
+    let mut parts = payload.splitn(3, '.');
+    parts.next() == Some(TICKET)
+        && parts.next().and_then(|expires| expires.parse::<i64>().ok()).is_some_and(|expires| expires > now)
+        && same_secret(mac, &sign(&key(db), payload))
+}
+
 fn current(app: &App, headers: &HeaderMap, now: i64) -> Option<Session> {
     session_id(headers).and_then(|token| check(&app.db(), &token, now))
 }
@@ -231,7 +246,17 @@ pub async fn status(State(app): State<Arc<App>>, headers: HeaderMap) -> Json<Val
 #[derive(Deserialize)]
 pub struct Login {
     password: String,
-    #[serde(default)]
+}
+
+#[derive(Deserialize)]
+pub struct Confirm {
+    password: String,
+    code: String,
+}
+
+#[derive(Deserialize)]
+pub struct Code {
+    ticket: String,
     code: String,
 }
 
@@ -266,29 +291,33 @@ async fn hash(app: &App, password: String) -> Option<String> {
     .flatten()
 }
 
+fn throttled(app: &App) -> Option<Response> {
+    app.logins().attempt(now_ms()).err().map(wait)
+}
+
+fn fresh_code(app: &App, secret: &str, code: &str) -> bool {
+    let db = app.db();
+    totp::accept(secret, code, now_ms(), db::meta(&db, TOTP_STEP)).is_some_and(|step| db::set_meta(&db, TOTP_STEP, step).is_ok())
+}
+
+async fn refuse(status: StatusCode, text: &'static str) -> Response {
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    (status, text).into_response()
+}
+
 async fn wrong(app: &App, password: &str, code: &str, totp: Option<&str>, rejected: StatusCode) -> Option<Response> {
-    let Some(stored) = stored(app) else { return Some((StatusCode::CONFLICT, "set a password first").into_response()) };
-    if let Err(left) = app.logins().attempt(now_ms()) {
-        return Some(wait(left));
+    if let Some(wait) = throttled(app) {
+        return Some(wait);
     }
-    let known = verify(app, &stored, password).await;
-    let step = match totp {
-        Some(secret) => totp::accept(secret, code, now_ms(), db::meta(&app.db(), TOTP_STEP)),
-        None => Some(0),
+    let known = match stored(app) {
+        Some(hash) => verify(app, &hash, password).await,
+        None => false,
     };
-    match (known, step) {
-        (true, Some(step)) => {
-            if totp.is_some() {
-                let _ = db::set_meta(&app.db(), TOTP_STEP, step);
-            }
-            app.logins().forgive();
-            None
-        }
-        _ => {
-            tokio::time::sleep(Duration::from_secs(1)).await;
-            Some((rejected, if totp.is_some() { "wrong password or code" } else { "wrong password" }).into_response())
-        }
+    if known && totp.is_none_or(|secret| fresh_code(app, secret, code)) {
+        app.logins().forgive();
+        return None;
     }
+    Some(refuse(rejected, if totp.is_some() { "wrong password or code" } else { "wrong password" }).await)
 }
 
 fn weak(password: &str) -> Option<Response> {
@@ -350,10 +379,32 @@ pub async fn change(State(app): State<Arc<App>>, headers: HeaderMap, Json(form):
 }
 
 pub async fn login(State(app): State<Arc<App>>, headers: HeaderMap, Json(login): Json<Login>) -> Response {
-    let totp = db::secret(&app.db(), TOTP);
-    if let Some(rejected) = wrong(&app, &login.password, &login.code, totp.as_deref(), StatusCode::UNAUTHORIZED).await {
-        return rejected;
+    let Some(hash) = stored(&app) else { return (StatusCode::CONFLICT, "set a password first").into_response() };
+    if let Some(wait) = throttled(&app) {
+        return wait;
     }
+    if !verify(&app, &hash, &login.password).await {
+        return refuse(StatusCode::UNAUTHORIZED, "wrong password").await;
+    }
+    if db::secret(&app.db(), TOTP).is_some() {
+        return ([(header::CACHE_CONTROL, "no-store")], Json(json!({ "ticket": ticket(&app.db(), now_ms()) }))).into_response();
+    }
+    app.logins().forgive();
+    start_session(&app, &headers)
+}
+
+pub async fn login_code(State(app): State<Arc<App>>, headers: HeaderMap, Json(form): Json<Code>) -> Response {
+    let Some(secret) = db::secret(&app.db(), TOTP) else { return (StatusCode::CONFLICT, "TOTP is off, sign in with the password").into_response() };
+    if let Some(wait) = throttled(&app) {
+        return wait;
+    }
+    if !ticket_valid(&app.db(), &form.ticket, now_ms()) {
+        return (StatusCode::FORBIDDEN, "the sign-in timed out, enter the password again").into_response();
+    }
+    if !fresh_code(&app, &secret, &form.code) {
+        return refuse(StatusCode::UNAUTHORIZED, "wrong code").await;
+    }
+    app.logins().forgive();
     start_session(&app, &headers)
 }
 
@@ -372,7 +423,7 @@ pub async fn totp_start(State(app): State<Arc<App>>) -> Response {
     ([(header::CACHE_CONTROL, "no-store")], Json(json!({ "secret": secret, "qr": totp::qr(&uri), "uri": uri }))).into_response()
 }
 
-pub async fn totp_enable(State(app): State<Arc<App>>, Json(form): Json<Login>) -> Response {
+pub async fn totp_enable(State(app): State<Arc<App>>, Json(form): Json<Confirm>) -> Response {
     if let Some(refused) = elsewhere(&app, "set up TOTP") {
         return refused;
     }
@@ -393,7 +444,7 @@ pub async fn totp_enable(State(app): State<Arc<App>>, Json(form): Json<Login>) -
     StatusCode::NO_CONTENT.into_response()
 }
 
-pub async fn totp_disable(State(app): State<Arc<App>>, Json(form): Json<Login>) -> Response {
+pub async fn totp_disable(State(app): State<Arc<App>>, Json(form): Json<Confirm>) -> Response {
     if let Some(refused) = elsewhere(&app, "turn off TOTP") {
         return refused;
     }
@@ -518,36 +569,66 @@ mod tests {
         assert!(check(&app.db(), &token, now_ms()).is_none());
     }
 
+    async fn body(response: Response) -> Value {
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 16).await.expect("body");
+        serde_json::from_slice(&bytes).expect("json")
+    }
+
     #[tokio::test(flavor = "multi_thread")]
-    async fn two_factor_sign_in_needs_a_fresh_code() {
+    async fn totp_sign_in_asks_for_the_code_after_the_password() {
         let app = Arc::new(app());
         let hashed = hash(&app, "first-password".into()).await.expect("hash");
         db::create_secret(&app.db(), PASSWORD, &hashed).expect("store");
-        let started = totp_start(State(app.clone())).await;
-        assert_eq!(started.status(), StatusCode::OK);
+        assert_eq!(totp_start(State(app.clone())).await.status(), StatusCode::OK);
         let pending = db::secret(&app.db(), TOTP_PENDING).expect("pending");
-        let form = |password: &str, code: String| Json(Login { password: password.into(), code });
+        let confirm = |code: String| Json(Confirm { password: "first-password".into(), code });
         let (session, _) = issue(&app.db(), now_ms(), now_ms());
         let first = totp::current_code(&pending, now_ms());
-        let enabled = totp_enable(State(app.clone()), form("first-password", first.clone())).await;
-        assert_eq!(enabled.status(), StatusCode::NO_CONTENT);
+        assert_eq!(totp_enable(State(app.clone()), confirm(first.clone())).await.status(), StatusCode::NO_CONTENT);
         assert_eq!(db::secret(&app.db(), TOTP).as_deref(), Some(pending.as_str()));
         assert!(check(&app.db(), &session, now_ms()).is_some());
-        let reused = login(State(app.clone()), HeaderMap::new(), form("first-password", first)).await;
+
+        let password = |text: &str| Json(Login { password: text.into() });
+        assert_eq!(login(State(app.clone()), HeaderMap::new(), password("wrong-password")).await.status(), StatusCode::UNAUTHORIZED);
+        let step = login(State(app.clone()), HeaderMap::new(), password("first-password")).await;
+        assert_eq!(step.status(), StatusCode::OK);
+        assert!(!step.headers().contains_key(header::SET_COOKIE));
+        let ticket = body(step).await["ticket"].as_str().expect("ticket").to_string();
+        assert!(check(&app.db(), &ticket, now_ms()).is_none());
+
+        let code = |ticket: &str, code: String| Json(Code { ticket: ticket.into(), code });
+        let reused = login_code(State(app.clone()), HeaderMap::new(), code(&ticket, first)).await;
         assert_eq!(reused.status(), StatusCode::UNAUTHORIZED);
-        let missing = login(State(app.clone()), HeaderMap::new(), form("first-password", String::new())).await;
-        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+        let forged = login_code(State(app.clone()), HeaderMap::new(), code(&session, totp::current_code(&pending, now_ms()))).await;
+        assert_eq!(forged.status(), StatusCode::FORBIDDEN);
         db::set_meta(&app.db(), TOTP_STEP, 0).expect("forget the step");
-        let fresh = login(State(app.clone()), HeaderMap::new(), form("first-password", totp::current_code(&pending, now_ms()))).await;
-        assert_eq!(fresh.status(), StatusCode::NO_CONTENT);
-        let refused = totp_disable(State(app.clone()), form("first-password", String::new())).await;
-        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+        let signed_in = login_code(State(app.clone()), HeaderMap::new(), code(&ticket, totp::current_code(&pending, now_ms()))).await;
+        assert_eq!(signed_in.status(), StatusCode::NO_CONTENT);
+        assert!(signed_in.headers().contains_key(header::SET_COOKIE));
+        assert!(!ticket_valid(&app.db(), &ticket, now_ms() + TICKET_LIFETIME));
+
+        assert_eq!(totp_disable(State(app.clone()), confirm(String::new())).await.status(), StatusCode::FORBIDDEN);
         assert!(db::secret(&app.db(), TOTP).is_some());
         db::set_meta(&app.db(), TOTP_STEP, 0).expect("forget the step");
-        let disabled = totp_disable(State(app.clone()), form("first-password", totp::current_code(&pending, now_ms()))).await;
-        assert_eq!(disabled.status(), StatusCode::NO_CONTENT);
+        assert_eq!(totp_disable(State(app.clone()), confirm(totp::current_code(&pending, now_ms()))).await.status(), StatusCode::NO_CONTENT);
         assert!(db::secret(&app.db(), TOTP).is_none());
         assert!(check(&app.db(), &session, now_ms()).is_some());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_right_password_alone_does_not_reset_the_wait() {
+        let app = Arc::new(app());
+        let hashed = hash(&app, "first-password".into()).await.expect("hash");
+        db::create_secret(&app.db(), PASSWORD, &hashed).expect("store");
+        db::set_secret(&app.db(), TOTP, &totp::secret()).expect("totp");
+        {
+            let mut throttle = app.logins();
+            throttle.failures = 3;
+            throttle.last = now_ms();
+        }
+        let step = login(State(app.clone()), HeaderMap::new(), Json(Login { password: "first-password".into() })).await;
+        assert_eq!(step.status(), StatusCode::OK);
+        assert_eq!(app.logins().failures, 4);
     }
 
     #[test]

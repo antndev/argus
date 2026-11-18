@@ -990,7 +990,7 @@ fn password_change(store: Store) -> impl IntoView {
         {group("Password")}
         <form on:submit=change>
             {row("Current password", "", secret_input(current, "Current password", "current-password"))}
-            <Show when=move || store.two_factor.get()>{row("TOTP code", "", secret_input(code, "TOTP code", "one-time-code"))}</Show>
+            <Show when=move || store.two_factor.get()>{row("Authentication code", "", secret_input(code, "Authentication code", "one-time-code"))}</Show>
             {row("New password", "At least 10 characters.", secret_input(next, "New password", "new-password"))}
             {row("Repeat new password", "", secret_input(repeat, "Repeat new password", "new-password"))}
             {form_actions(error, view! {
@@ -1024,7 +1024,7 @@ fn two_factor(store: Store) -> impl IntoView {
         enrollment.set(None);
         disabling.set(false);
     };
-    let start = move |_| {
+    let start = move || {
         busy.set(true);
         error.set(String::new());
         spawn_local(async move {
@@ -1034,6 +1034,12 @@ fn two_factor(store: Store) -> impl IntoView {
             }
             busy.set(false);
         });
+    };
+    let state = move || (store.two_factor.get(), enrollment.with(Option::is_some), disabling.get());
+    let toggle = move |_| match (store.two_factor.get_untracked(), enrollment.with_untracked(Option::is_some) || disabling.get_untracked()) {
+        (_, true) => close(),
+        (false, false) => start(),
+        (true, false) => disabling.set(true),
     };
     let confirm = move |path: &'static str, done: &'static str| {
         move |event: SubmitEvent| {
@@ -1049,57 +1055,59 @@ fn two_factor(store: Store) -> impl IntoView {
     let incomplete = move || password.get().is_empty() || code.get().trim().is_empty();
     let credentials = move || {
         view! {
-            {row("Password", "", secret_input(password, "Password", "current-password"))}
-            {row("TOTP code", "The code your authenticator app shows right now.", secret_input(code, "TOTP code", "one-time-code"))}
+            {row("Current password", "", secret_input(password, "Current password", "current-password"))}
+            {row("Authentication code", "", secret_input(code, "Authentication code", "one-time-code"))}
         }
     };
-    let cancel = move || view! { <button class="btn" type="button" on:click=move |_| close()>"Cancel"</button> };
-    let content = move || match (store.two_factor.get(), enrollment.get(), disabling.get()) {
-        (false, None, _) => view! {
-            {row("TOTP", "Sign-in also asks for a code from an authenticator app.", view! {
-                <button class="btn" type="button" disabled=move || busy.get() on:click=start>"Set up"</button>
-            })}
-            {form_actions(error, ())}
-        }
-        .into_any(),
-        (false, Some(found), _) => view! {
-            <form on:submit=confirm("/api/v1/totp/enable", "TOTP is on")>
-                {row("QR code", "Scan it with an authenticator app, for example 1Password, Bitwarden or Passwords on the iPhone.", view! {
-                    <div class="qr" role="img" aria-label="QR code with the TOTP secret" inner_html=found.qr.unwrap_or_default()></div>
-                })}
-                {row("Setup key", "Type it in if you cannot scan the code.", view! { <code class="code key">{grouped(&found.secret)}</code> })}
-                {credentials()}
-                {form_actions(error, view! {
-                    {cancel()}
-                    <button class="btn primary" type="submit" disabled=move || busy.get() || incomplete()>"Turn on"</button>
-                })}
-            </form>
-        }
-        .into_any(),
-        (true, _, false) => row(
-            "TOTP",
-            "Sign-in asks for a code from your authenticator app.",
+    let actions = move |label: &'static str| {
+        form_actions(
+            error,
             view! {
-                <span class="value">"On"</span>
-                <button class="btn" type="button" on:click=move |_| disabling.set(true)>"Turn off"</button>
+                <button class="btn" type="button" on:click=move |_| close()>"Cancel"</button>
+                <button class="btn primary" type="submit" disabled=move || busy.get() || incomplete()>{label}</button>
             },
         )
-        .into_any(),
-        (true, _, true) => view! {
-            <form on:submit=confirm("/api/v1/totp/disable", "TOTP is off")>
-                {row("TOTP", "Confirm with your password and a current code.", view! { <span class="value">"On"</span> })}
-                {credentials()}
-                {form_actions(error, view! {
-                    {cancel()}
-                    <button class="btn primary" type="submit" disabled=move || busy.get() || incomplete()>"Turn off"</button>
+    };
+    let details = move || match (enrollment.get(), disabling.get()) {
+        (Some(found), _) => view! {
+            <form on:submit=confirm("/api/v1/totp/enable", "TOTP is on")>
+                {row("QR code", "For example 1Password, Bitwarden or Passwords on the iPhone.", view! {
+                    <div class="qr" role="img" aria-label="QR code with the TOTP secret" inner_html=found.qr.unwrap_or_default()></div>
                 })}
+                {row("Setup key", "If you cannot scan the code.", view! { <code class="code key">{grouped(&found.secret)}</code> })}
+                {credentials()}
+                {actions("Turn on")}
             </form>
         }
         .into_any(),
+        (None, true) => view! {
+            <form on:submit=confirm("/api/v1/totp/disable", "TOTP is off")>
+                {credentials()}
+                {actions("Turn off")}
+            </form>
+        }
+        .into_any(),
+        _ => form_actions(error, ()).into_any(),
+    };
+    let sub = move || match state() {
+        (_, true, _) => "Scan the QR code with an authenticator app, then confirm with your password and a code.",
+        (true, _, true) => "Confirm with your password and a code to turn it off.",
+        (true, _, _) => "Sign-in asks for a code from your authenticator app.",
+        _ => "Ask for a code from an authenticator app at sign-in.",
+    };
+    let checked = move || match state() {
+        (_, true, _) => true,
+        (true, _, true) => false,
+        (on, _, _) => on,
     };
     view! {
         {group("Two-factor authentication")}
-        {content}
+        {row("TOTP", sub, view! {
+            <button class="switch" type="button" role="switch" aria-label="TOTP" aria-checked=move || checked().to_string() disabled=move || busy.get() on:click=toggle>
+                <span></span>
+            </button>
+        })}
+        {details}
     }
 }
 

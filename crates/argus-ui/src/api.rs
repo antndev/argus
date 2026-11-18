@@ -46,6 +46,15 @@ pub async fn post<B: Serialize, T: DeserializeOwned>(path: &str, body: &B) -> Re
     checked(request.send().await).await?.json().await.map_err(failure)
 }
 
+pub async fn post_reply<B: Serialize, T: DeserializeOwned>(path: &str, body: &B) -> Result<Option<T>, Failure> {
+    let request = Request::post(path).json(body).map_err(failure)?;
+    let response = checked(request.send().await).await?;
+    if response.status() == 204 {
+        return Ok(None);
+    }
+    response.json().await.map(Some).map_err(failure)
+}
+
 pub async fn send<B: Serialize>(path: &str, body: &B) -> Result<(), Failure> {
     let request = Request::post(path).json(body).map_err(failure)?;
     checked(request.send().await).await.map(|_| ())

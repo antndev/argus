@@ -63,6 +63,7 @@ fn Login() -> impl IntoView {
     let password = RwSignal::new(String::new());
     let repeat = RwSignal::new(String::new());
     let code = RwSignal::new(String::new());
+    let ticket = RwSignal::new(None::<String>);
     let until = RwSignal::new(0.0);
     let error = RwSignal::new(String::new());
     let bad = RwSignal::new(false);
@@ -73,6 +74,36 @@ fn Login() -> impl IntoView {
         let _ = error.try_set(text);
         let _ = bad.try_set(true);
         let _ = shake.try_update(|n| *n += 1);
+    };
+    let done = move || {
+        for signal in [password, repeat, code, error] {
+            let _ = signal.try_set(String::new());
+        }
+        let _ = ticket.try_set(None);
+        store.refresh();
+    };
+    let back = move || {
+        ticket.set(None);
+        code.set(String::new());
+        error.set(String::new());
+        bad.set(false);
+    };
+    let handle = move |failure: api::Failure| match failure.status {
+        429 => {
+            let _ = until.try_set(js_sys::Date::now() + f64::from(failure.retry.max(1)) * 1_000.0);
+        }
+        401 => {
+            let _ = code.try_set(String::new());
+            fail(String::new());
+        }
+        403 if ticket.get_untracked().is_some() => {
+            back();
+            let _ = error.try_set(format::capitalize(&failure.text));
+        }
+        _ => {
+            fail(format::capitalize(&failure.text));
+            store.check_session();
+        }
     };
     let submit = move |event: SubmitEvent| {
         event.prevent_default();
@@ -90,23 +121,27 @@ fn Login() -> impl IntoView {
             return;
         }
         busy.set(true);
-        let path = if setup { "/api/v1/setup" } else { "/api/v1/login" };
-        let body = serde_json::json!({ "password": secret, "code": code.get_untracked() });
         spawn_local(async move {
-            match api::send(path, &body).await {
-                Ok(()) => {
-                    for signal in [password, repeat, code, error] {
-                        let _ = signal.try_set(String::new());
+            if let Some(pending) = ticket.get_untracked() {
+                let body = serde_json::json!({ "ticket": pending, "code": code.get_untracked() });
+                match api::send("/api/v1/login/totp", &body).await {
+                    Ok(()) => done(),
+                    Err(failure) => handle(failure),
+                }
+            } else if setup {
+                match api::send("/api/v1/setup", &serde_json::json!({ "password": secret })).await {
+                    Ok(()) => done(),
+                    Err(failure) => handle(failure),
+                }
+            } else {
+                match api::post_reply::<_, serde_json::Value>("/api/v1/login", &serde_json::json!({ "password": secret })).await {
+                    Ok(None) => done(),
+                    Ok(Some(reply)) => {
+                        let _ = password.try_set(String::new());
+                        let _ = ticket.try_set(reply["ticket"].as_str().map(str::to_string));
+                        request_animation_frame(focus_field);
                     }
-                    store.refresh();
-                }
-                Err(failure) if failure.status == 429 => {
-                    let _ = until.try_set(js_sys::Date::now() + f64::from(failure.retry.max(1)) * 1_000.0);
-                }
-                Err(failure) => {
-                    let _ = code.try_set(String::new());
-                    fail(if failure.status == 401 { String::new() } else { format::capitalize(&failure.text) });
-                    store.check_session();
+                    Err(failure) => handle(failure),
                 }
             }
             let _ = busy.try_set(false);
@@ -160,12 +195,10 @@ fn Login() -> impl IntoView {
             </p>
         }
     };
-    let ready = move || {
-        !password.get().is_empty()
-            && match store.gate.get().as_str() {
-                "setup" => !repeat.get().is_empty(),
-                _ => !store.two_factor.get() || !code.get().trim().is_empty(),
-            }
+    let ready = move || match (ticket.with(Option::is_some), store.gate.get().as_str()) {
+        (true, _) => !code.get().trim().is_empty(),
+        (false, "setup") => !password.get().is_empty() && !repeat.get().is_empty(),
+        _ => !password.get().is_empty(),
     };
     let blocked = move || !ready() || busy.get() || waiting() > 0.0;
     let submit_button = move |label: &'static str| {
@@ -175,20 +208,29 @@ fn Login() -> impl IntoView {
             </button>
         }
     };
-    let form = move || match store.gate.get().as_str() {
-        "pending" => view! {
+    let form = move || match (ticket.with(Option::is_some), store.gate.get().as_str()) {
+        (true, _) => view! {
+            <h1>"Two-factor authentication"</h1>
+            <p>"Enter the code from your authenticator app."</p>
+            <div class=fields>{field(code, "6-digit code", "one-time-code", false)}</div>
+            {submit_button("Verify")}
+            <button class="btn ghost" type="button" on:click=move |_| back()>"Back"</button>
+            {note()}
+        }
+        .into_any(),
+        (false, "pending") => view! {
             <h1>"Waiting for the internal node"</h1>
             <p>"This node takes its password from the internal node with the next sync."</p>
             <button class="btn primary" type="button" on:click=move |_| store.check_session()>"Check again"</button>
         }
         .into_any(),
-        "expired" => view! {
+        (false, "expired") => view! {
             <h1>"Setup time is over"</h1>
             <p>"Restart the node or run argus-node reset-password on the server, then check again."</p>
             <button class="btn primary" type="button" on:click=move |_| store.check_session()>"Check again"</button>
         }
         .into_any(),
-        "setup" => view! {
+        (false, "setup") => view! {
             <h1>"Set up Argus"</h1>
             <div class=fields>
                 {field(password, "Password", "new-password", true)}
@@ -200,11 +242,8 @@ fn Login() -> impl IntoView {
         .into_any(),
         _ => view! {
             <h1>"Welcome!"</h1>
-            <div class=fields>
-                {field(password, "Password", "current-password", true)}
-                <Show when=move || store.two_factor.get()>{field(code, "TOTP code", "one-time-code", false)}</Show>
-            </div>
-            {submit_button("Sign in")}
+            <div class=fields>{field(password, "Password", "current-password", true)}</div>
+            {move || submit_button(if store.two_factor.get() { "Continue" } else { "Sign in" })}
             {note()}
         }
         .into_any(),
@@ -215,6 +254,12 @@ fn Login() -> impl IntoView {
                 {form}
             </form>
         </div>
+    }
+}
+
+fn focus_field() {
+    if let Some(input) = document().query_selector(".login-field input").ok().flatten().and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok()) {
+        let _ = input.focus();
     }
 }
 

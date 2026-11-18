@@ -457,6 +457,7 @@ pub fn router(app: Arc<App>) -> Router {
         .merge(protected)
         .route("/api/v1/session", get(session::status))
         .route("/api/v1/login", post(session::login))
+        .route("/api/v1/login/totp", post(session::login_code))
         .route("/api/v1/setup", post(session::setup))
         .route("/api/v1/logout", post(session::logout))
         .route_layer(axum::middleware::from_fn_with_state(app.clone(), session::enabled));
