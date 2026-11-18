@@ -1035,7 +1035,7 @@ fn two_factor(store: Store) -> impl IntoView {
     let content = move || {
         match (store.two_factor.get(), enrollment.get()) {
         (true, _) => view! {
-            {row("Authenticator app", "Every sign-in asks for the current code.", view! { <span class="value">"On"</span> })}
+            {row("TOTP", "Every sign-in asks for the current TOTP code.", view! { <span class="value">"On"</span> })}
             {confirm()}
             {row("", "Turning it off signs out every other session on both nodes.", view! {
                 <button class="btn" type="button" disabled=move || busy.get() on:click=finish("/api/v1/totp/disable", "Two-factor sign-in is off")>"Turn off"</button>
@@ -1056,7 +1056,7 @@ fn two_factor(store: Store) -> impl IntoView {
             })}
         }
         .into_any(),
-        (false, None) => row("Authenticator app", "Asks for a six-digit code from an app on your phone at every sign-in.", view! {
+        (false, None) => row("TOTP", "Asks for a six-digit TOTP code from an authenticator app at every sign-in.", view! {
             <button class="btn" type="button" disabled=move || busy.get() on:click=start>"Set up"</button>
         })
         .into_any(),
