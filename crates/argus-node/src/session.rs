@@ -266,9 +266,11 @@ async fn hash(app: &App, password: String) -> Option<String> {
     .flatten()
 }
 
-async fn confirm(app: &App, password: &str, code: &str, totp: Option<&str>, rejected: StatusCode) -> Result<(), Response> {
-    let Some(stored) = stored(app) else { return Err((StatusCode::CONFLICT, "set a password first").into_response()) };
-    app.logins().attempt(now_ms()).map_err(wait)?;
+async fn wrong(app: &App, password: &str, code: &str, totp: Option<&str>, rejected: StatusCode) -> Option<Response> {
+    let Some(stored) = stored(app) else { return Some((StatusCode::CONFLICT, "set a password first").into_response()) };
+    if let Err(left) = app.logins().attempt(now_ms()) {
+        return Some(wait(left));
+    }
     let known = verify(app, &stored, password).await;
     let step = match totp {
         Some(secret) => totp::accept(secret, code, now_ms(), db::meta(&app.db(), TOTP_STEP)),
@@ -280,11 +282,11 @@ async fn confirm(app: &App, password: &str, code: &str, totp: Option<&str>, reje
                 let _ = db::set_meta(&app.db(), TOTP_STEP, step);
             }
             app.logins().forgive();
-            Ok(())
+            None
         }
         _ => {
             tokio::time::sleep(Duration::from_secs(1)).await;
-            Err((rejected, if totp.is_some() { "wrong password or code" } else { "wrong password" }).into_response())
+            Some((rejected, if totp.is_some() { "wrong password or code" } else { "wrong password" }).into_response())
         }
     }
 }
@@ -329,7 +331,7 @@ pub async fn change(State(app): State<Arc<App>>, headers: HeaderMap, Json(form):
         return refused;
     }
     let totp = db::secret(&app.db(), TOTP);
-    if let Err(rejected) = confirm(&app, &form.current, &form.code, totp.as_deref(), StatusCode::FORBIDDEN).await {
+    if let Some(rejected) = wrong(&app, &form.current, &form.code, totp.as_deref(), StatusCode::FORBIDDEN).await {
         return rejected;
     }
     if let Some(rejected) = weak(&form.password) {
@@ -349,7 +351,7 @@ pub async fn change(State(app): State<Arc<App>>, headers: HeaderMap, Json(form):
 
 pub async fn login(State(app): State<Arc<App>>, headers: HeaderMap, Json(login): Json<Login>) -> Response {
     let totp = db::secret(&app.db(), TOTP);
-    if let Err(rejected) = confirm(&app, &login.password, &login.code, totp.as_deref(), StatusCode::UNAUTHORIZED).await {
+    if let Some(rejected) = wrong(&app, &login.password, &login.code, totp.as_deref(), StatusCode::UNAUTHORIZED).await {
         return rejected;
     }
     start_session(&app, &headers)
@@ -377,7 +379,7 @@ pub async fn totp_enable(State(app): State<Arc<App>>, headers: HeaderMap, Json(f
     let Some(pending) = db::secret(&app.db(), TOTP_PENDING) else {
         return (StatusCode::CONFLICT, "start the setup again").into_response();
     };
-    if let Err(rejected) = confirm(&app, &form.password, &form.code, Some(&pending), StatusCode::FORBIDDEN).await {
+    if let Some(rejected) = wrong(&app, &form.password, &form.code, Some(&pending), StatusCode::FORBIDDEN).await {
         return rejected;
     }
     let saved = {
@@ -398,7 +400,7 @@ pub async fn totp_disable(State(app): State<Arc<App>>, headers: HeaderMap, Json(
     let Some(secret) = db::secret(&app.db(), TOTP) else {
         return (StatusCode::CONFLICT, "two-factor sign-in is already off").into_response();
     };
-    if let Err(rejected) = confirm(&app, &form.password, &form.code, Some(&secret), StatusCode::FORBIDDEN).await {
+    if let Some(rejected) = wrong(&app, &form.password, &form.code, Some(&secret), StatusCode::FORBIDDEN).await {
         return rejected;
     }
     let saved = {
