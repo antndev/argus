@@ -42,7 +42,7 @@ agents ──HTTPS──▶ internal node ◀──sync, started by internal─�
 argus-node serve --config /data/argus.json
 argus-node check --config /data/argus.json   # validates the config without starting
 argus-node token       # prints a new random token
-argus-node reset-password --config /data/argus.json   # removes the dashboard password and two-factor sign-in
+argus-node reset-password --config /data/argus.json   # removes the dashboard password and TOTP
 ```
 
 Everything is configured either in the dashboard under Settings or in the JSON file. Changes in the dashboard save
@@ -52,12 +52,11 @@ their sha256 on the next load. The dashboard never shows secrets, only whether o
 
 The dashboard always needs a password, and it is never part of the config file. On the first visit the dashboard asks
 for a new one; this only works within 15 minutes after the node starts, so nobody else on the network can claim an
-unconfigured node later. The node keeps only the argon2 hash, in its database. Change it under Settings, Sign-in,
-where you can also turn on two-factor sign-in with an authenticator app. If the password or the phone is lost, run
-`argus-node reset-password` on the server (in Docker:
-`docker exec argus-node /argus-node reset-password --config /data/argus.json`), which also turns off two-factor
-sign-in, and set a new password within 15 minutes. After five wrong attempts the login waits 30 s, longer with every
-further mistake.
+unconfigured node later. The node keeps only the argon2 hash, in its database. Change it under Settings, Security,
+where you can also turn on two-factor authentication with TOTP codes from an authenticator app. If the password or
+the phone is lost, run `argus-node reset-password` on the server (in Docker:
+`docker exec argus-node /argus-node reset-password --config /data/argus.json`), which also turns off TOTP, and set a
+new password within 15 minutes. After five wrong attempts the login waits 30 s, longer with every further mistake.
 With two nodes the internal node owns the password and hands it to the external node with every sync, together with
 the key that signs sessions, so one login works on both. Set, change and reset it on the internal node.
 

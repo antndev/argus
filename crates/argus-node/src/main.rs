@@ -545,7 +545,7 @@ async fn main() {
     }
     if resetting {
         session::reset(&db, now_ms()).unwrap_or_else(|error| fail(format!("cannot reset the password: {error}")));
-        println!("dashboard password and two-factor sign-in removed, open the dashboard within 15 minutes to set a new password");
+        println!("dashboard password and TOTP removed, open the dashboard within 15 minutes to set a new password");
         return;
     }
     if config.shared.agents.is_empty() {

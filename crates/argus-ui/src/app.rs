@@ -202,7 +202,7 @@ fn Login() -> impl IntoView {
             <h1>"Welcome!"</h1>
             <div class=fields>
                 {field(password, "Password", "current-password", true)}
-                <Show when=move || store.two_factor.get()>{field(code, "Authenticator code", "one-time-code", false)}</Show>
+                <Show when=move || store.two_factor.get()>{field(code, "TOTP code", "one-time-code", false)}</Show>
             </div>
             {submit_button("Sign in")}
             {note()}

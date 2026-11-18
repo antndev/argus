@@ -1,3 +1,4 @@
+use leptos::ev::SubmitEvent;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde_json::{Value, json};
@@ -22,7 +23,7 @@ const PAGES: [(&str, &str); 12] = [
     ("peer", "External node"),
     ("backups", "ZeroByte integration"),
     ("retention", "Data retention"),
-    ("dashboard", "Sign-in"),
+    ("security", "Security"),
     ("appearance", "Appearance"),
     ("json", "JSON"),
     ("about", "About"),
@@ -941,44 +942,61 @@ fn secret_input(value: RwSignal<String>, label: &'static str, autocomplete: &'st
     }
 }
 
+fn form_actions(error: RwSignal<String>, buttons: impl IntoView + 'static) -> impl IntoView {
+    view! {
+        <div class="form-actions">
+            <p class="form-error" role="alert">{move || error.get()}</p>
+            {buttons}
+        </div>
+    }
+}
+
+fn submit(path: &'static str, body: Value, busy: RwSignal<bool>, error: RwSignal<String>, done: impl FnOnce() + 'static) {
+    busy.set(true);
+    error.set(String::new());
+    spawn_local(async move {
+        match api::send(path, &body).await {
+            Ok(()) => done(),
+            Err(failure) => error.set(format::capitalize(&failure.text)),
+        }
+        busy.set(false);
+    });
+}
+
 fn password_change(store: Store) -> impl IntoView {
     let current = RwSignal::new(String::new());
     let code = RwSignal::new(String::new());
     let next = RwSignal::new(String::new());
     let repeat = RwSignal::new(String::new());
     let busy = RwSignal::new(false);
-    let change = move |_| {
+    let error = RwSignal::new(String::new());
+    let change = move |event: SubmitEvent| {
+        event.prevent_default();
         if next.get_untracked() != repeat.get_untracked() {
-            store.notify("The new passwords do not match");
+            error.set("The new passwords do not match".to_string());
             return;
         }
-        busy.set(true);
         let body = json!({ "current": current.get_untracked(), "password": next.get_untracked(), "code": code.get_untracked() });
-        spawn_local(async move {
-            match api::send("/api/v1/password", &body).await {
-                Ok(()) => {
-                    store.notify("Password changed, other sessions were signed out");
-                    for field in [current, code, next, repeat] {
-                        field.set(String::new());
-                    }
-                }
-                Err(failure) => {
-                    code.set(String::new());
-                    store.notify(format!("Not changed, {failure}"));
-                }
+        submit("/api/v1/password", body, busy, error, move || {
+            for field in [current, code, next, repeat] {
+                field.set(String::new());
             }
-            busy.set(false);
+            store.notify("Password changed, other sessions were signed out");
         });
     };
+    let incomplete =
+        move || current.get().is_empty() || next.get().is_empty() || repeat.get().is_empty() || (store.two_factor.get() && code.get().trim().is_empty());
     view! {
         {group("Password")}
-        {row("Current password", "", secret_input(current, "Current password", "current-password"))}
-        <Show when=move || store.two_factor.get()>{row("Authenticator code", "", secret_input(code, "Authenticator code", "one-time-code"))}</Show>
-        {row("New password", "At least 10 characters.", secret_input(next, "New password", "new-password"))}
-        {row("Repeat new password", "", secret_input(repeat, "Repeat new password", "new-password"))}
-        {row("", "Changing the password signs out every other session on both nodes.", view! {
-            <button class="btn primary" type="button" disabled=move || busy.get() on:click=change>"Change password"</button>
-        })}
+        <form on:submit=change>
+            {row("Current password", "", secret_input(current, "Current password", "current-password"))}
+            <Show when=move || store.two_factor.get()>{row("TOTP code", "", secret_input(code, "TOTP code", "one-time-code"))}</Show>
+            {row("New password", "At least 10 characters.", secret_input(next, "New password", "new-password"))}
+            {row("Repeat new password", "", secret_input(repeat, "Repeat new password", "new-password"))}
+            {form_actions(error, view! {
+                <button class="btn primary" type="submit" disabled=move || busy.get() || incomplete()>"Change password"</button>
+            })}
+        </form>
     }
 }
 
@@ -994,86 +1012,103 @@ fn grouped(secret: &str) -> String {
 
 fn two_factor(store: Store) -> impl IntoView {
     let enrollment = RwSignal::new(None::<Enrollment>);
+    let disabling = RwSignal::new(false);
     let password = RwSignal::new(String::new());
     let code = RwSignal::new(String::new());
     let busy = RwSignal::new(false);
+    let error = RwSignal::new(String::new());
+    let close = move || {
+        for field in [password, code, error] {
+            field.set(String::new());
+        }
+        enrollment.set(None);
+        disabling.set(false);
+    };
     let start = move |_| {
         busy.set(true);
+        error.set(String::new());
         spawn_local(async move {
             match api::post::<_, Enrollment>("/api/v1/totp/start", &json!({})).await {
                 Ok(found) => enrollment.set(Some(found)),
-                Err(failure) => store.notify(format!("Not started, {failure}")),
+                Err(failure) => error.set(format::capitalize(&failure.text)),
             }
             busy.set(false);
         });
     };
-    let finish = move |path: &'static str, done: &'static str| {
-        move |_| {
-            busy.set(true);
+    let confirm = move |path: &'static str, done: &'static str| {
+        move |event: SubmitEvent| {
+            event.prevent_default();
             let body = json!({ "password": password.get_untracked(), "code": code.get_untracked() });
-            spawn_local(async move {
-                match api::send(path, &body).await {
-                    Ok(()) => {
-                        store.notify(done);
-                        password.set(String::new());
-                        enrollment.set(None);
-                        store.check_session();
-                    }
-                    Err(failure) => store.notify(format!("Not changed, {failure}")),
-                }
-                code.set(String::new());
-                busy.set(false);
+            submit(path, body, busy, error, move || {
+                close();
+                store.notify(done);
+                store.check_session();
             });
         }
     };
-    let confirm = move || {
+    let incomplete = move || password.get().is_empty() || code.get().trim().is_empty();
+    let credentials = move || {
         view! {
             {row("Password", "", secret_input(password, "Password", "current-password"))}
-            {row("Authenticator code", "The six digits the app shows right now.", secret_input(code, "Authenticator code", "one-time-code"))}
+            {row("TOTP code", "The code your authenticator app shows right now.", secret_input(code, "TOTP code", "one-time-code"))}
         }
     };
-    let content = move || {
-        match (store.two_factor.get(), enrollment.get()) {
-        (true, _) => view! {
-            {row("TOTP", "Every sign-in asks for the current TOTP code.", view! { <span class="value">"On"</span> })}
-            {confirm()}
-            {row("", "Turning it off signs out every other session on both nodes.", view! {
-                <button class="btn" type="button" disabled=move || busy.get() on:click=finish("/api/v1/totp/disable", "Two-factor sign-in is off")>"Turn off"</button>
+    let cancel = move || view! { <button class="btn" type="button" on:click=move |_| close()>"Cancel"</button> };
+    let content = move || match (store.two_factor.get(), enrollment.get(), disabling.get()) {
+        (false, None, _) => view! {
+            {row("TOTP", "Sign-in also asks for a code from an authenticator app.", view! {
+                <button class="btn" type="button" disabled=move || busy.get() on:click=start>"Set up"</button>
             })}
+            {form_actions(error, ())}
         }
         .into_any(),
-        (false, Some(enrollment_view)) => view! {
-            {row("Scan the code", "With an authenticator app such as 1Password, Bitwarden or Google Authenticator.", view! {
-                <div class="qr" role="img" aria-label="QR code for the authenticator app" inner_html=enrollment_view.qr.unwrap_or_default()></div>
-            })}
-            {row("Or enter the key", "", view! { <code class="code key">{grouped(&enrollment_view.secret)}</code> })}
-            {confirm()}
-            {row("", "Turning it on signs out every other session on both nodes.", view! {
-                <div class="ctl-row">
-                    <button class="btn" type="button" on:click=move |_| enrollment.set(None)>"Cancel"</button>
-                    <button class="btn primary" type="button" disabled=move || busy.get() on:click=finish("/api/v1/totp/enable", "Two-factor sign-in is on, other sessions were signed out")>"Turn on"</button>
-                </div>
-            })}
+        (false, Some(found), _) => view! {
+            <form on:submit=confirm("/api/v1/totp/enable", "TOTP is on")>
+                {row("QR code", "Scan it with an authenticator app, for example 1Password, Bitwarden or Passwords on the iPhone.", view! {
+                    <div class="qr" role="img" aria-label="QR code with the TOTP secret" inner_html=found.qr.unwrap_or_default()></div>
+                })}
+                {row("Setup key", "Type it in if you cannot scan the code.", view! { <code class="code key">{grouped(&found.secret)}</code> })}
+                {credentials()}
+                {form_actions(error, view! {
+                    {cancel()}
+                    <button class="btn primary" type="submit" disabled=move || busy.get() || incomplete()>"Turn on"</button>
+                })}
+            </form>
         }
         .into_any(),
-        (false, None) => row("TOTP", "Asks for a six-digit TOTP code from an authenticator app at every sign-in.", view! {
-            <button class="btn" type="button" disabled=move || busy.get() on:click=start>"Set up"</button>
-        })
+        (true, _, false) => row(
+            "TOTP",
+            "Sign-in asks for a code from your authenticator app.",
+            view! {
+                <span class="value">"On"</span>
+                <button class="btn" type="button" on:click=move |_| disabling.set(true)>"Turn off"</button>
+            },
+        )
         .into_any(),
-    }
+        (true, _, true) => view! {
+            <form on:submit=confirm("/api/v1/totp/disable", "TOTP is off")>
+                {row("TOTP", "Confirm with your password and a current code.", view! { <span class="value">"On"</span> })}
+                {credentials()}
+                {form_actions(error, view! {
+                    {cancel()}
+                    <button class="btn primary" type="submit" disabled=move || busy.get() || incomplete()>"Turn off"</button>
+                })}
+            </form>
+        }
+        .into_any(),
     };
     view! {
-        {group("Two-factor sign-in")}
+        {group("Two-factor authentication")}
         {content}
     }
 }
 
-fn dashboard(store: Store) -> impl IntoView {
+fn security(store: Store) -> impl IntoView {
     store.check_session();
     let follower = move || read(store, "/peer").is_some() && read(store, "/peer/url").is_none();
     view! {
-        <p class="lead">"One password protects the dashboard on both nodes, two-factor sign-in adds a code from an authenticator app. The password is only stored as an argon2 hash, in the database and never in the config file, and the internal node shares the login with the external one. If the password or the phone is lost, run argus-node reset-password on the internal node, which also turns off two-factor sign-in, and set a new password within 15 minutes."</p>
-        <Show when=move || !follower() fallback=|| view! { <p class="empty-note">"Change the password and two-factor sign-in on the internal node, they reach this node with the next sync."</p> }>
+        <p class="lead">"Applies to both nodes. If you are locked out, run argus-node reset-password on the internal node, it removes the password and TOTP."</p>
+        <Show when=move || !follower() fallback=|| view! { <p class="empty-note">"Change these on the internal node, they reach this node with the next sync."</p> }>
             {password_change(store)}
             {two_factor(store)}
         </Show>
@@ -1142,7 +1177,7 @@ pub fn SettingsPage() -> impl IntoView {
             "peer" => peer(store).into_any(),
             "backups" => backups(store).into_any(),
             "retention" => retention(store).into_any(),
-            "dashboard" => dashboard(store).into_any(),
+            "security" => security(store).into_any(),
             "appearance" => appearance(store).into_any(),
             "json" => json_editor(store).into_any(),
             "about" => about(store).into_any(),

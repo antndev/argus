@@ -1935,6 +1935,31 @@ td .sev {
   color: var(--err);
 }
 
+.form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 0;
+}
+
+.form-actions .form-error {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+}
+
+.form-actions .form-error:empty {
+  display: none;
+}
+
+.input:-webkit-autofill,
+.login-field input:-webkit-autofill {
+  -webkit-text-fill-color: var(--text);
+  -webkit-box-shadow: 0 0 0 40px var(--bg-sunken) inset;
+  caret-color: var(--text);
+}
+
 .switch {
   position: relative;
   display: block;
@@ -2517,6 +2542,15 @@ li[data-host]:has(> .list-item[aria-current="page"]) {
   .ctl > .code.key {
     margin-left: 0;
     text-align: left;
+  }
+
+  .form-actions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .form-actions .form-error {
+    flex-basis: 100%;
   }
 
   .row:has(> .ctl > .value:only-child) > .row-head {

@@ -358,11 +358,11 @@ pub async fn login(State(app): State<Arc<App>>, headers: HeaderMap, Json(login):
 }
 
 pub async fn totp_start(State(app): State<Arc<App>>) -> Response {
-    if let Some(refused) = elsewhere(&app, "set up two-factor sign-in") {
+    if let Some(refused) = elsewhere(&app, "set up TOTP") {
         return refused;
     }
     if db::secret(&app.db(), TOTP).is_some() {
-        return (StatusCode::CONFLICT, "two-factor sign-in is already on").into_response();
+        return (StatusCode::CONFLICT, "TOTP is already on").into_response();
     }
     let secret = totp::secret();
     if db::set_secret(&app.db(), TOTP_PENDING, &secret).is_err() {
@@ -372,8 +372,8 @@ pub async fn totp_start(State(app): State<Arc<App>>) -> Response {
     ([(header::CACHE_CONTROL, "no-store")], Json(json!({ "secret": secret, "qr": totp::qr(&uri), "uri": uri }))).into_response()
 }
 
-pub async fn totp_enable(State(app): State<Arc<App>>, headers: HeaderMap, Json(form): Json<Login>) -> Response {
-    if let Some(refused) = elsewhere(&app, "set up two-factor sign-in") {
+pub async fn totp_enable(State(app): State<Arc<App>>, Json(form): Json<Login>) -> Response {
+    if let Some(refused) = elsewhere(&app, "set up TOTP") {
         return refused;
     }
     let Some(pending) = db::secret(&app.db(), TOTP_PENDING) else {
@@ -384,34 +384,30 @@ pub async fn totp_enable(State(app): State<Arc<App>>, headers: HeaderMap, Json(f
     }
     let saved = {
         let db = app.db();
-        db::set_secret(&db, TOTP, &pending).and_then(|_| db::delete_secret(&db, TOTP_PENDING)).and_then(|_| rotate(&db, now_ms()))
+        db::set_secret(&db, TOTP, &pending).and_then(|_| db::delete_secret(&db, TOTP_PENDING))
     };
     if saved.is_err() {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
-    log("two-factor sign-in turned on, all sessions ended");
-    start_session(&app, &headers)
+    log("TOTP turned on");
+    StatusCode::NO_CONTENT.into_response()
 }
 
-pub async fn totp_disable(State(app): State<Arc<App>>, headers: HeaderMap, Json(form): Json<Login>) -> Response {
-    if let Some(refused) = elsewhere(&app, "turn off two-factor sign-in") {
+pub async fn totp_disable(State(app): State<Arc<App>>, Json(form): Json<Login>) -> Response {
+    if let Some(refused) = elsewhere(&app, "turn off TOTP") {
         return refused;
     }
     let Some(secret) = db::secret(&app.db(), TOTP) else {
-        return (StatusCode::CONFLICT, "two-factor sign-in is already off").into_response();
+        return (StatusCode::CONFLICT, "TOTP is already off").into_response();
     };
     if let Some(rejected) = wrong(&app, &form.password, &form.code, Some(&secret), StatusCode::FORBIDDEN).await {
         return rejected;
     }
-    let saved = {
-        let db = app.db();
-        db::delete_secret(&db, TOTP).and_then(|_| rotate(&db, now_ms()))
-    };
-    if saved.is_err() {
+    if db::delete_secret(&app.db(), TOTP).is_err() {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
-    log("two-factor sign-in turned off, all sessions ended");
-    start_session(&app, &headers)
+    log("TOTP turned off");
+    StatusCode::NO_CONTENT.into_response()
 }
 
 pub async fn logout() -> Response {
@@ -531,10 +527,12 @@ mod tests {
         assert_eq!(started.status(), StatusCode::OK);
         let pending = db::secret(&app.db(), TOTP_PENDING).expect("pending");
         let form = |password: &str, code: String| Json(Login { password: password.into(), code });
+        let (session, _) = issue(&app.db(), now_ms(), now_ms());
         let first = totp::current_code(&pending, now_ms());
-        let enabled = totp_enable(State(app.clone()), HeaderMap::new(), form("first-password", first.clone())).await;
+        let enabled = totp_enable(State(app.clone()), form("first-password", first.clone())).await;
         assert_eq!(enabled.status(), StatusCode::NO_CONTENT);
         assert_eq!(db::secret(&app.db(), TOTP).as_deref(), Some(pending.as_str()));
+        assert!(check(&app.db(), &session, now_ms()).is_some());
         let reused = login(State(app.clone()), HeaderMap::new(), form("first-password", first)).await;
         assert_eq!(reused.status(), StatusCode::UNAUTHORIZED);
         let missing = login(State(app.clone()), HeaderMap::new(), form("first-password", String::new())).await;
@@ -542,9 +540,14 @@ mod tests {
         db::set_meta(&app.db(), TOTP_STEP, 0).expect("forget the step");
         let fresh = login(State(app.clone()), HeaderMap::new(), form("first-password", totp::current_code(&pending, now_ms()))).await;
         assert_eq!(fresh.status(), StatusCode::NO_CONTENT);
-        let disabled = totp_disable(State(app.clone()), HeaderMap::new(), form("first-password", String::new())).await;
-        assert_eq!(disabled.status(), StatusCode::FORBIDDEN);
+        let refused = totp_disable(State(app.clone()), form("first-password", String::new())).await;
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
         assert!(db::secret(&app.db(), TOTP).is_some());
+        db::set_meta(&app.db(), TOTP_STEP, 0).expect("forget the step");
+        let disabled = totp_disable(State(app.clone()), form("first-password", totp::current_code(&pending, now_ms()))).await;
+        assert_eq!(disabled.status(), StatusCode::NO_CONTENT);
+        assert!(db::secret(&app.db(), TOTP).is_none());
+        assert!(check(&app.db(), &session, now_ms()).is_some());
     }
 
     #[test]
